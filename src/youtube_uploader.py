@@ -143,6 +143,9 @@ def upload_short(
                 if reason in ("uploadLimitExceeded", "quotaExceeded"):
                     log.error("YouTube quota exhausted: %s", reason)
                     raise QuotaExhaustedError(reason) from e
+        if e.resp.status == 403:
+            log.error("YouTube 403 forbidden (likely channel restriction): %s", reason)
+            raise QuotaExhaustedError(f"forbidden:{reason}") from e
         log.exception("Upload failed for %s", title)
         return None
     except Exception:
