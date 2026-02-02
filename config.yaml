@@ -1,0 +1,38 @@
+twitch:
+  # Set TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET environment variables
+  # client_id and client_secret are read from env vars, not from this file
+
+youtube:
+  # Path to OAuth client secrets JSON downloaded from Google Cloud Console
+  client_secrets_file: "credentials/client_secret.json"
+
+streamers:
+  - name: "TheBurntPeanut"
+    twitch_id: "472066926"
+    youtube_credentials: "credentials/xqc_youtube.json"
+    facecam:
+      x: 0.15   # offset from left edge
+      y: 0.62   # lower to capture body
+      w: 0.18   # ~18% of source width
+      h: 0.34   # taller to capture body
+      output_w: 420  # facecam width in output (pixels)
+    privacy_status: "public"
+    category_id: "20"
+  # Add more streamers here:
+  # - name: "shroud"
+  #   twitch_id: "37402112"
+  #   youtube_credentials: "credentials/shroud_youtube.json"
+
+pipeline:
+  max_clips_per_streamer: 6
+  max_clip_duration_seconds: 60
+  velocity_weight: 2.0
+  top_percentile: 0.10
+  bootstrap_top_n: 10
+  clip_lookback_hours: 24
+  data_dir: "data"
+  tmp_dir: "data/tmp"
+  db_path: "data/clips.db"
+  log_file: "data/pipeline.log"
+  upload_spacing_hours: 4
+  max_uploads_per_window: 1

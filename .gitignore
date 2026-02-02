@@ -1,0 +1,8 @@
+credentials/
+data/clips.db
+data/tmp/
+data/pipeline.log
+data/*.log
+__pycache__/
+*.pyc
+.env
