@@ -1,0 +1,57 @@
+name: Twitch-to-Shorts Pipeline
+on:
+  schedule:
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          pip install -r requirements.txt yt-dlp
+
+      - name: Restore credentials
+        env:
+          YOUTUBE_CLIENT_SECRETS: ${{ secrets.YOUTUBE_CLIENT_SECRETS }}
+          YOUTUBE_TOKEN_XQC: ${{ secrets.YOUTUBE_TOKEN_XQC }}
+        run: |
+          mkdir -p credentials
+          echo "$YOUTUBE_CLIENT_SECRETS" | base64 -d > credentials/client_secret.json
+          echo "$YOUTUBE_TOKEN_XQC" | base64 -d > credentials/xqc_youtube.json
+
+      - name: Restore database
+        uses: actions/cache@v4
+        with:
+          path: data/clips.db
+          key: clips-db-${{ github.run_id }}
+          restore-keys: clips-db-
+
+      - name: Run pipeline
+        env:
+          TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
+          TWITCH_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
+        run: python main.py
+
+      - name: Save updated token
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          NEW_TOKEN=$(base64 -w0 credentials/xqc_youtube.json)
+          gh secret set YOUTUBE_TOKEN_XQC --body "$NEW_TOKEN"
+
+      - name: Save database
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/clips.db
+          key: clips-db-${{ github.run_id }}
