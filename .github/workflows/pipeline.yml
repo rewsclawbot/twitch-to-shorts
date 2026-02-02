@@ -29,11 +29,10 @@ jobs:
           echo "$YOUTUBE_TOKEN_XQC" | base64 -d > credentials/xqc_youtube.json
 
       - name: Restore database
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: data/clips.db
-          key: clips-db-${{ github.run_id }}
-          restore-keys: clips-db-
+          key: clips-db
 
       - name: Run pipeline
         env:
@@ -54,4 +53,4 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: data/clips.db
-          key: clips-db-${{ github.run_id }}
+          key: clips-db

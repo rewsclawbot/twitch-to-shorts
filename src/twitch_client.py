@@ -1,8 +1,12 @@
+from __future__ import annotations
+
 import logging
 import time
 from datetime import datetime, timedelta, timezone
 
 import requests
+
+from src.models import Clip
 
 log = logging.getLogger(__name__)
 
@@ -46,7 +50,10 @@ class TwitchClient:
             resp = requests.request(method, url, headers=self._headers(), **kwargs)
         if resp.status_code == 429:
             reset = resp.headers.get("Ratelimit-Reset")
-            wait = min(max(int(reset) - int(time.time()), 1), 60) if reset else 5
+            try:
+                wait = min(max(int(reset) - int(time.time()), 1), 60)
+            except (ValueError, TypeError):
+                wait = 5
             log.warning("Rate limited by Twitch, waiting %ds", wait)
             time.sleep(wait)
             resp = requests.request(method, url, headers=self._headers(), **kwargs)
@@ -68,12 +75,12 @@ class TwitchClient:
                 result[g["id"]] = g["name"]
         return result
 
-    def fetch_clips(self, broadcaster_id: str, lookback_hours: int = 24, max_clips: int = 500) -> list[dict]:
+    def fetch_clips(self, broadcaster_id: str, lookback_hours: int = 24, max_clips: int = 500) -> list[Clip]:
         """Fetch all clips for a broadcaster in the given time window."""
         started_at = (datetime.now(timezone.utc) - timedelta(hours=lookback_hours)).isoformat()
         ended_at = datetime.now(timezone.utc).isoformat()
 
-        clips = []
+        clips: list[Clip] = []
         cursor = None
 
         while True:
@@ -90,17 +97,17 @@ class TwitchClient:
 
             data = resp.json()
             for c in data.get("data", []):
-                clips.append({
-                    "id": c["id"],
-                    "url": c["url"],
-                    "title": c["title"],
-                    "view_count": c["view_count"],
-                    "created_at": c["created_at"],
-                    "thumbnail_url": c["thumbnail_url"],
-                    "duration": c["duration"],
-                    "broadcaster_name": c["broadcaster_name"],
-                    "game_id": c.get("game_id", ""),
-                })
+                clips.append(Clip(
+                    id=c["id"],
+                    url=c["url"],
+                    title=c["title"],
+                    view_count=c["view_count"],
+                    created_at=c["created_at"],
+                    thumbnail_url=c["thumbnail_url"],
+                    duration=c["duration"],
+                    broadcaster_name=c["broadcaster_name"],
+                    game_id=c.get("game_id", ""),
+                ))
 
             cursor = data.get("pagination", {}).get("cursor")
             if not cursor or not data.get("data") or len(clips) >= max_clips:

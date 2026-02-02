@@ -1,0 +1,50 @@
+import sqlite3
+from datetime import datetime, timezone, timedelta
+
+import pytest
+
+from src.db import init_schema
+from src.models import Clip
+
+
+@pytest.fixture
+def conn():
+    """In-memory SQLite connection with full schema initialized."""
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    init_schema(c)
+    yield c
+    c.close()
+
+
+@pytest.fixture
+def now_utc():
+    return datetime.now(timezone.utc)
+
+
+def make_clip(
+    clip_id="clip_1",
+    streamer="teststreamer",
+    title="Great play",
+    view_count=1000,
+    duration=30,
+    created_at=None,
+    game_id="12345",
+    youtube_id=None,
+) -> Clip:
+    """Factory for Clip dataclass instances."""
+    if created_at is None:
+        created_at = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    return Clip(
+        id=clip_id,
+        url=f"https://clips.twitch.tv/{clip_id}",
+        title=title,
+        view_count=view_count,
+        created_at=created_at,
+        thumbnail_url="https://example.com/thumb.jpg",
+        duration=duration,
+        broadcaster_name=streamer,
+        game_id=game_id,
+        streamer=streamer,
+        youtube_id=youtube_id,
+    )

@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import logging
 import os
+import re
 import sys
 import time
 
@@ -10,6 +13,8 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
+
+from src.models import Clip
 
 log = logging.getLogger(__name__)
 
@@ -70,10 +75,7 @@ def _truncate_title(title: str, max_len: int = 100) -> str:
 def upload_short(
     service,
     video_path: str,
-    title: str,
-    streamer_name: str,
-    description: str = "",
-    game_name: str = "",
+    clip: Clip,
     category_id: str = "20",
     privacy_status: str = "public",
 ) -> str | None:
@@ -81,7 +83,12 @@ def upload_short(
 
     Raises QuotaExhaustedError if the YouTube API quota is exceeded.
     """
-    full_title = _truncate_title(f"{title} | {streamer_name}".replace("<", "").replace(">", ""))
+    title = clip.title
+    streamer_name = clip.streamer
+    game_name = clip.game_name
+    description = ""
+    sanitized = re.sub(r"[\x00-\x1f<>]", "", f"{title} | {streamer_name}")
+    full_title = _truncate_title(sanitized)
 
     if not description:
         description = f"Clip from {streamer_name}'s stream\n\n#Shorts"
@@ -112,28 +119,15 @@ def upload_short(
         request = service.videos().insert(part="snippet,status", body=body, media_body=media)
         response = None
         while response is None:
-            max_retries = 3
-            for attempt in range(max_retries + 1):
+            for attempt in range(4):
                 try:
                     _, response = request.next_chunk()
                     break
-                except HttpError as chunk_err:
-                    if chunk_err.resp.status >= 500 and attempt < max_retries:
+                except (HttpError, ConnectionError, TimeoutError) as err:
+                    retryable = not isinstance(err, HttpError) or err.resp.status >= 500
+                    if retryable and attempt < 3:
                         delay = 2**attempt
-                        log.warning(
-                            "Upload chunk got %s, retrying in %ds (attempt %d/%d)",
-                            chunk_err.resp.status, delay, attempt + 1, max_retries,
-                        )
-                        time.sleep(delay)
-                    else:
-                        raise
-                except (ConnectionError, TimeoutError) as chunk_err:
-                    if attempt < max_retries:
-                        delay = 2**attempt
-                        log.warning(
-                            "Upload chunk failed (%s), retrying in %ds (attempt %d/%d)",
-                            type(chunk_err).__name__, delay, attempt + 1, max_retries,
-                        )
+                        log.warning("Upload chunk retry %d/3: %s", attempt + 1, err)
                         time.sleep(delay)
                     else:
                         raise

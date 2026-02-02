@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import logging
 import logging.handlers
@@ -11,6 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from src.models import Clip, FacecamConfig, StreamerConfig, PipelineConfig
 from src.twitch_client import TwitchClient
 from src.clip_filter import filter_and_rank
 from src.dedup import filter_new_clips
@@ -38,9 +41,21 @@ def setup_logging(log_file: str | None = None):
     )
 
 
-def load_config(path: str = "config.yaml") -> dict:
+def load_config(path: str = "config.yaml") -> tuple[PipelineConfig, list[StreamerConfig], dict]:
+    """Load config.yaml and return typed objects plus the raw dict for non-modeled keys."""
     with open(path) as f:
-        return yaml.safe_load(f)
+        raw = yaml.safe_load(f)
+
+    pipeline = PipelineConfig(**raw.get("pipeline", {}))
+
+    streamers: list[StreamerConfig] = []
+    for s in raw.get("streamers", []):
+        s = dict(s)  # shallow copy to avoid mutating raw config
+        facecam_data = s.pop("facecam", None)
+        facecam = FacecamConfig(**facecam_data) if facecam_data else None
+        streamers.append(StreamerConfig(facecam=facecam, **s))
+
+    return pipeline, streamers, raw
 
 
 def clean_stale_tmp(tmp_dir: str, max_age_hours: int = 24):
@@ -97,22 +112,21 @@ def release_lock():
         pass
 
 
-def run_pipeline(config: dict, dry_run: bool = False):
+def run_pipeline(pipeline: PipelineConfig, streamers: list[StreamerConfig], raw_config: dict, dry_run: bool = False):
     log = logging.getLogger("pipeline")
-    cfg = config["pipeline"]
-    conn = get_connection(cfg["db_path"])
+    conn = get_connection(pipeline.db_path)
     try:
-        _run_pipeline_inner(config, cfg, conn, log, dry_run=dry_run)
+        _run_pipeline_inner(pipeline, streamers, raw_config, conn, log, dry_run=dry_run)
     finally:
-        clean_stale_tmp(cfg["tmp_dir"], max_age_hours=1)
+        clean_stale_tmp(pipeline.tmp_dir, max_age_hours=1)
         conn.close()
 
 
-def _run_pipeline_inner(config: dict, cfg: dict, conn, log, dry_run: bool = False):
+def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], raw_config: dict, conn, log, dry_run: bool = False):
 
     # Read Twitch credentials from environment
-    twitch_client_id = os.environ.get("TWITCH_CLIENT_ID") or (config.get("twitch") or {}).get("client_id")
-    twitch_client_secret = os.environ.get("TWITCH_CLIENT_SECRET") or (config.get("twitch") or {}).get("client_secret")
+    twitch_client_id = os.environ.get("TWITCH_CLIENT_ID") or (raw_config.get("twitch") or {}).get("client_id")
+    twitch_client_secret = os.environ.get("TWITCH_CLIENT_SECRET") or (raw_config.get("twitch") or {}).get("client_secret")
     if not twitch_client_id or not twitch_client_secret:
         log.error("TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET environment variables must be set")
         raise ValueError("TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET must be set")
@@ -120,18 +134,23 @@ def _run_pipeline_inner(config: dict, cfg: dict, conn, log, dry_run: bool = Fals
     twitch = TwitchClient(twitch_client_id, twitch_client_secret)
 
     # Clean stale tmp files at startup
-    clean_stale_tmp(cfg["tmp_dir"])
+    clean_stale_tmp(cfg.tmp_dir)
 
+    total_fetched = 0
+    total_filtered = 0
+    total_downloaded = 0
+    total_processed = 0
     total_uploaded = 0
+    total_failed = 0
 
-    for streamer in config["streamers"]:
-        name = streamer["name"]
-        twitch_id = streamer["twitch_id"]
+    for streamer in streamers:
+        name = streamer.name
+        twitch_id = streamer.twitch_id
         log.info("=== Processing streamer: %s ===", name)
 
         # 1. Fetch clips
         try:
-            clips = twitch.fetch_clips(twitch_id, cfg["clip_lookback_hours"])
+            clips = twitch.fetch_clips(twitch_id, cfg.clip_lookback_hours)
         except Exception:
             log.exception("Failed to fetch clips for %s", name)
             continue
@@ -140,43 +159,44 @@ def _run_pipeline_inner(config: dict, cfg: dict, conn, log, dry_run: bool = Fals
             log.info("No clips found for %s", name)
             continue
 
+        total_fetched += len(clips)
+
         # Tag clips with streamer name
         for c in clips:
-            c["streamer"] = name
+            c.streamer = name
 
         # 2. Filter & rank
         ranked = filter_and_rank(
             conn, clips, name,
-            velocity_weight=cfg["velocity_weight"],
-            top_percentile=cfg["top_percentile"],
-            bootstrap_top_n=cfg["bootstrap_top_n"],
-            max_clips=cfg["max_clips_per_streamer"],
+            velocity_weight=cfg.velocity_weight,
+            top_percentile=cfg.top_percentile,
+            bootstrap_top_n=cfg.bootstrap_top_n,
+            max_clips=cfg.max_clips_per_streamer,
         )
 
         # 3. Deduplicate
         new_clips = filter_new_clips(conn, ranked)
+        total_filtered += len(new_clips)
         log.info("%d new clips after dedup (from %d ranked)", len(new_clips), len(ranked))
 
         if not new_clips:
             continue
 
         # Resolve game names for tags
-        game_ids = [c.get("game_id", "") for c in new_clips]
+        game_ids = [c.game_id for c in new_clips]
         try:
             game_names = twitch.get_game_names(game_ids)
         except Exception:
             log.warning("Failed to resolve game names, continuing without")
             game_names = {}
         for c in new_clips:
-            c["game_name"] = game_names.get(c.get("game_id", ""), "")
+            c.game_name = game_names.get(c.game_id, "")
 
         # Upload scheduling: max 1 upload per streamer per 4 hours
-        upload_spacing_hours = cfg.get("upload_spacing_hours", 4)
-        max_uploads_per_window = cfg.get("max_uploads_per_window", 1)
-        recent = recent_upload_count(conn, name, upload_spacing_hours)
-        uploads_remaining = max(max_uploads_per_window - recent, 0)
+        recent = recent_upload_count(conn, name, cfg.upload_spacing_hours)
+        uploads_remaining = max(cfg.max_uploads_per_window - recent, 0)
         if uploads_remaining == 0:
-            log.info("Skipping uploads for %s: %d uploaded in last %dh", name, recent, upload_spacing_hours)
+            log.info("Skipping uploads for %s: %d uploaded in last %dh", name, recent, cfg.upload_spacing_hours)
             continue
 
         # Get YouTube service for this streamer (skip in dry-run)
@@ -184,46 +204,53 @@ def _run_pipeline_inner(config: dict, cfg: dict, conn, log, dry_run: bool = Fals
         if not dry_run:
             try:
                 yt_service = get_authenticated_service(
-                    config["youtube"]["client_secrets_file"],
-                    streamer["youtube_credentials"],
+                    raw_config["youtube"]["client_secrets_file"],
+                    streamer.youtube_credentials,
                 )
             except Exception:
                 log.exception("Failed to authenticate YouTube for %s", name)
                 continue
 
         quota_exhausted = False
-        max_duration = cfg.get("max_clip_duration_seconds", 60)
+        max_duration = cfg.max_clip_duration_seconds
         for clip in new_clips[:uploads_remaining]:
             # Pre-filter by duration before downloading
-            if clip["duration"] > max_duration:
-                log.info("Skipping clip %s (%.1fs > %ds max duration)", clip["id"], clip["duration"], max_duration)
+            if clip.duration > max_duration:
+                log.info("Skipping clip %s (%.1fs > %ds max duration)", clip.id, clip.duration, max_duration)
                 continue
 
             # 4. Download
-            video_path = download_clip(clip, cfg["tmp_dir"])
+            video_path = download_clip(clip, cfg.tmp_dir)
             if not video_path:
+                total_failed += 1
                 continue
+            total_downloaded += 1
 
             # 5. Process video
             vertical_path = crop_to_vertical(
-                video_path, cfg["tmp_dir"], cfg["max_clip_duration_seconds"],
-                facecam=streamer.get("facecam"),
+                video_path, cfg.tmp_dir, cfg.max_clip_duration_seconds,
+                facecam=streamer.facecam,
             )
             if not vertical_path:
-                increment_fail_count(conn, clip["id"], clip["streamer"], clip["created_at"])
+                increment_fail_count(conn, clip)
+                total_failed += 1
+                try:
+                    os.remove(video_path)
+                except OSError:
+                    pass
                 continue
+            total_processed += 1
 
             # 6. Upload (skip in dry-run)
             if dry_run:
-                log.info("[DRY RUN] Would upload clip %s: %s", clip["id"], clip["title"])
+                log.info("[DRY RUN] Would upload clip %s: %s", clip.id, clip.title)
                 total_uploaded += 1
                 continue
 
             try:
-                youtube_id = upload_short(yt_service, vertical_path, clip["title"], name,
-                                         game_name=clip.get("game_name", ""),
-                                         category_id=streamer.get("category_id", "20"),
-                                         privacy_status=streamer.get("privacy_status", "public"))
+                youtube_id = upload_short(yt_service, vertical_path, clip,
+                                         category_id=streamer.category_id,
+                                         privacy_status=streamer.privacy_status)
             except QuotaExhaustedError:
                 log.warning("YouTube quota exhausted — stopping uploads for this run")
                 quota_exhausted = True
@@ -231,25 +258,27 @@ def _run_pipeline_inner(config: dict, cfg: dict, conn, log, dry_run: bool = Fals
 
             # 7. Verify & record in DB only after successful upload
             if not youtube_id:
-                increment_fail_count(conn, clip["id"], clip["streamer"], clip["created_at"])
+                increment_fail_count(conn, clip)
+                total_failed += 1
                 continue
 
-            if youtube_id:
-                if not verify_upload(yt_service, youtube_id):
-                    log.warning("Upload verification failed for clip %s (yt=%s), skipping DB insert", clip["id"], youtube_id)
-                    increment_fail_count(conn, clip["id"], clip["streamer"], clip["created_at"])
-                    continue
-                clip["youtube_id"] = youtube_id
-                insert_clip(conn, clip)
-                total_uploaded += 1
-                log.info("Uploaded clip %s -> YouTube %s", clip["id"], youtube_id)
+            if not verify_upload(yt_service, youtube_id):
+                log.warning("Upload verification failed for clip %s (yt=%s), skipping DB insert", clip.id, youtube_id)
+                increment_fail_count(conn, clip)
+                total_failed += 1
+                continue
 
-                # Clean up tmp files after successful upload
-                for tmp_path in (video_path, vertical_path):
-                    try:
-                        os.remove(tmp_path)
-                    except OSError as e:
-                        log.warning("Failed to remove tmp file %s: %s", tmp_path, e)
+            clip.youtube_id = youtube_id
+            insert_clip(conn, clip)
+            total_uploaded += 1
+            log.info("Uploaded clip %s -> YouTube %s", clip.id, youtube_id)
+
+            # Clean up tmp files after successful upload
+            for tmp_path in (video_path, vertical_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError as e:
+                    log.warning("Failed to remove tmp file %s: %s", tmp_path, e)
 
         # Update rolling stats
         update_streamer_stats(conn, name)
@@ -257,7 +286,10 @@ def _run_pipeline_inner(config: dict, cfg: dict, conn, log, dry_run: bool = Fals
         if quota_exhausted:
             break
 
-    log.info("Pipeline complete. Uploaded %d clips total.", total_uploaded)
+    log.info(
+        "Pipeline complete: fetched=%d filtered=%d downloaded=%d processed=%d uploaded=%d failed=%d",
+        total_fetched, total_filtered, total_downloaded, total_processed, total_uploaded, total_failed,
+    )
 
 
 def main():
@@ -266,8 +298,8 @@ def main():
                         help="Run full pipeline but skip YouTube upload")
     args = parser.parse_args()
 
-    config = load_config()
-    setup_logging(config["pipeline"].get("log_file"))
+    pipeline, streamers, raw_config = load_config()
+    setup_logging(pipeline.log_file)
     log = logging.getLogger("main")
 
     if not acquire_lock():
@@ -279,7 +311,7 @@ def main():
             log.info("Starting Twitch-to-Shorts pipeline (DRY RUN)")
         else:
             log.info("Starting Twitch-to-Shorts pipeline")
-        run_pipeline(config, dry_run=args.dry_run)
+        run_pipeline(pipeline, streamers, raw_config, dry_run=args.dry_run)
     finally:
         release_lock()
 

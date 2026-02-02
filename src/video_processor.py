@@ -1,9 +1,13 @@
+from __future__ import annotations
+
 import json
 import logging
 import os
 import re
 import shutil
 import subprocess
+
+from src.models import FacecamConfig
 
 log = logging.getLogger(__name__)
 
@@ -95,7 +99,7 @@ def _detect_leading_silence(input_path: str, threshold_db: float = -30, min_dura
 
 
 def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
-                     facecam: dict | None = None) -> str | None:
+                     facecam: FacecamConfig | None = None) -> str | None:
     """Crop a 16:9 video to 9:16 vertical (1080x1920) with facecam+gameplay layout.
 
     If facecam config is provided, output is split: top 20% facecam, bottom 80% gameplay.
@@ -136,25 +140,28 @@ def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
     else:
         vf = "crop=ih*9/16:ih,scale=1080:1920"
 
+    # Measure loudness once, reuse across GPU/CPU attempts
+    loudness = _measure_loudness(input_path)
+
     # Try GPU encode first, fall back to CPU
-    if _run_ffmpeg(input_path, output_path, vf, clip_id, gpu=True, ss=silence_offset):
+    if _run_ffmpeg(input_path, output_path, vf, clip_id, gpu=True, ss=silence_offset, loudness=loudness):
         return output_path
-    if _run_ffmpeg(input_path, output_path, vf, clip_id, gpu=False, ss=silence_offset):
+    if _run_ffmpeg(input_path, output_path, vf, clip_id, gpu=False, ss=silence_offset, loudness=loudness):
         return output_path
 
     return None
 
 
-def _has_facecam(input_path: str, facecam: dict, clip_id: str, duration: float | None = None) -> bool:
+def _has_facecam(input_path: str, facecam: FacecamConfig, clip_id: str, duration: float | None = None) -> bool:
     """Check if the facecam region contains an actual camera feed vs static UI.
 
     Samples frames at 25% of duration and measures pixel variance in the expected
     facecam region. Low variance = static UI element, not a real facecam.
     """
-    fx = facecam.get("x", 0.0)
-    fy = facecam.get("y", 0.75)
-    fw = facecam.get("w", 0.25)
-    fh = facecam.get("h", 0.25)
+    fx = facecam.x
+    fy = facecam.y
+    fw = facecam.w
+    fh = facecam.h
 
     # Multi-point sampling: 25%, 50%, 75% of duration for robust detection
     if duration is None:
@@ -171,29 +178,18 @@ def _has_facecam(input_path: str, facecam: dict, clip_id: str, duration: float |
             "-frames:v", "5",
             "-f", "null", "-",
         ]
-        proc = None
         try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            try:
-                _, stderr_bytes = proc.communicate(timeout=15)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-                log.warning("Facecam detection timed out at %.0f%% for %s", pct * 100, clip_id)
-                continue
-            stderr = stderr_bytes.decode(errors="replace")
-            for line in stderr.splitlines():
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            for line in result.stderr.splitlines():
                 if "signalstats.YDIF=" in line:
                     try:
-                        val = float(line.split("YDIF=")[1])
-                        ydif_values.append(val)
+                        ydif_values.append(float(line.split("YDIF=")[1]))
                     except (ValueError, IndexError):
                         pass
+        except subprocess.TimeoutExpired:
+            log.warning("Facecam detection timed out at %.0f%% for %s", pct * 100, clip_id)
         except Exception as e:
             log.warning("Facecam detection failed at %.0f%% for %s: %s", pct * 100, clip_id, e)
-            if proc and proc.poll() is None:
-                proc.kill()
-                proc.wait()
 
     if ydif_values:
         avg_ydif = sum(ydif_values) / len(ydif_values)
@@ -233,12 +229,12 @@ def _measure_loudness(input_path: str) -> dict | None:
         return None
 
 
-def _build_composite_filter(facecam: dict) -> str:
+def _build_composite_filter(facecam: FacecamConfig) -> str:
     """Build ffmpeg filtergraph for facecam (top 20%) + gameplay (bottom 80%)."""
-    fx = facecam.get("x", 0.0)
-    fy = facecam.get("y", 0.75)
-    fw = facecam.get("w", 0.25)
-    fh = facecam.get("h", 0.25)
+    fx = facecam.x
+    fy = facecam.y
+    fw = facecam.w
+    fh = facecam.h
 
     # Gameplay: full-height 1080x1920 center-crop
     game_crop = "crop=ih*9/16:ih:(iw-ih*9/16)/2:0"
@@ -246,7 +242,7 @@ def _build_composite_filter(facecam: dict) -> str:
 
     # Facecam: crop from source, scale to ~25% width, preserve aspect, overlay top-center
     cam_crop = f"crop=iw*{fw}:ih*{fh}:iw*{fx}:ih*{fy}"
-    cam_w = facecam.get("output_w", 420)
+    cam_w = facecam.output_w
     cam_w = cam_w + (cam_w % 2)  # Ensure even width for encoder compatibility
     cam = f"[0:v]{cam_crop},scale={cam_w}:-2[cam]"
 
@@ -254,7 +250,8 @@ def _build_composite_filter(facecam: dict) -> str:
 
 
 def _run_ffmpeg(input_path: str, output_path: str, vf: str,
-                clip_id: str, gpu: bool, ss: float = 0.0) -> bool:
+                clip_id: str, gpu: bool, ss: float = 0.0,
+                loudness: dict | None = None) -> bool:
     """Run ffmpeg with given filter. Returns True on success.
 
     Writes to a temp file and atomically renames on success to prevent
@@ -283,7 +280,6 @@ def _run_ffmpeg(input_path: str, output_path: str, vf: str,
         cmd += ["-c:v", "libx264", "-crf", "20", "-preset", "medium"]
 
     # Two-pass loudnorm: use measured stats if available, else fall back to single-pass
-    loudness = _measure_loudness(input_path)
     if loudness:
         af = (
             f"loudnorm=I=-14:LRA=11:TP=-1.5"

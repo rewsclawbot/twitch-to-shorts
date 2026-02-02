@@ -1,6 +1,10 @@
+from __future__ import annotations
+
 import sqlite3
 import os
 from datetime import datetime, timedelta, timezone
+
+from src.models import Clip
 
 
 def get_connection(db_path: str) -> sqlite3.Connection:
@@ -61,7 +65,7 @@ def recent_upload_count(conn: sqlite3.Connection, streamer: str, hours: int = 4)
     return row["cnt"] if row else 0
 
 
-def insert_clip(conn: sqlite3.Connection, clip: dict):
+def insert_clip(conn: sqlite3.Connection, clip: Clip):
     conn.execute(
         """INSERT INTO clips (clip_id, streamer, title, view_count, created_at, posted_at, youtube_id)
            VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -70,8 +74,8 @@ def insert_clip(conn: sqlite3.Connection, clip: dict):
                posted_at = excluded.posted_at,
                view_count = excluded.view_count,
                title = excluded.title""",
-        (clip["id"], clip["streamer"], clip["title"], clip["view_count"],
-         clip["created_at"], datetime.now(timezone.utc).isoformat(), clip.get("youtube_id")),
+        (clip.id, clip.streamer, clip.title, clip.view_count,
+         clip.created_at, datetime.now(timezone.utc).isoformat(), clip.youtube_id),
     )
     conn.commit()
 
@@ -89,23 +93,26 @@ def update_streamer_stats(conn: sqlite3.Connection, streamer: str):
     ).fetchone()
     avg_views = row["avg_views"] or 0
     count = row["cnt"] or 0
+    now = datetime.now(timezone.utc).isoformat()
     conn.execute(
         """INSERT INTO streamer_stats (streamer, avg_views_30d, clip_count_30d, last_updated)
            VALUES (?, ?, ?, ?)
-           ON CONFLICT(streamer) DO UPDATE SET avg_views_30d=?, clip_count_30d=?, last_updated=?""",
-        (streamer, avg_views, count, datetime.now(timezone.utc).isoformat(),
-         avg_views, count, datetime.now(timezone.utc).isoformat()),
+           ON CONFLICT(streamer) DO UPDATE SET
+               avg_views_30d = excluded.avg_views_30d,
+               clip_count_30d = excluded.clip_count_30d,
+               last_updated = excluded.last_updated""",
+        (streamer, avg_views, count, now),
     )
     conn.commit()
 
 
-def increment_fail_count(conn: sqlite3.Connection, clip_id: str, streamer: str, created_at: str):
+def increment_fail_count(conn: sqlite3.Connection, clip: Clip):
     """Record a processing failure. Upserts clip row and increments fail_count."""
     conn.execute(
         """INSERT INTO clips (clip_id, streamer, created_at, fail_count)
            VALUES (?, ?, ?, 1)
            ON CONFLICT(clip_id) DO UPDATE SET fail_count = fail_count + 1""",
-        (clip_id, streamer, created_at),
+        (clip.id, clip.streamer, clip.created_at),
     )
     conn.commit()
 
