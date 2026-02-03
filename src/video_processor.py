@@ -113,7 +113,8 @@ def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
         return output_path
 
     duration = _get_duration(input_path)
-    if duration is not None and duration > max_duration:
+    # Allow slight overage (60.5s) since YouTube Shorts limit is ~60s
+    if duration is not None and duration > max_duration + 0.5:
         log.info("Skipping clip %s: duration %.1fs exceeds %ds limit", clip_id, duration, max_duration)
         return None
 
