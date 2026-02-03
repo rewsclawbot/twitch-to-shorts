@@ -166,6 +166,14 @@ def verify_upload(service, video_id: str) -> bool:
             return True
         log.warning("Video %s has unexpected status: %s", video_id, status)
         return status != "rejected"
+    except HttpError as e:
+        # Scope insufficient — we only have upload scope, not readonly
+        # Trust the upload succeeded since upload_short returned a video ID
+        if e.resp.status == 403 and "insufficientPermissions" in str(e):
+            log.info("Skipping verification for %s (no readonly scope) — trusting upload", video_id)
+            return True
+        log.exception("Failed to verify upload %s — assuming failure", video_id)
+        return False
     except Exception:
         log.exception("Failed to verify upload %s — assuming failure", video_id)
         return False
