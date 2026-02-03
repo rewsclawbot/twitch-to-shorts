@@ -143,8 +143,11 @@ def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
     # Measure loudness once, reuse across GPU/CPU attempts
     loudness = _measure_loudness(input_path)
 
-    # Try GPU encode first, fall back to CPU
-    if _run_ffmpeg(input_path, output_path, vf, clip_id, gpu=True, ss=silence_offset, loudness=loudness):
+    # Skip GPU if DISABLE_GPU_ENCODE is set (e.g., GitHub Actions has no CUDA)
+    skip_gpu = os.environ.get("DISABLE_GPU_ENCODE", "").lower() in ("1", "true", "yes")
+
+    # Try GPU encode first (if not disabled), fall back to CPU
+    if not skip_gpu and _run_ffmpeg(input_path, output_path, vf, clip_id, gpu=True, ss=silence_offset, loudness=loudness):
         return output_path
     if _run_ffmpeg(input_path, output_path, vf, clip_id, gpu=False, ss=silence_offset, loudness=loudness):
         return output_path
@@ -301,7 +304,7 @@ def _run_ffmpeg(input_path: str, output_path: str, vf: str,
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
-            _, stderr_bytes = proc.communicate(timeout=120)
+            _, stderr_bytes = proc.communicate(timeout=300)
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
