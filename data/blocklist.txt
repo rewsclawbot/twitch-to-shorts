@@ -1,0 +1,8 @@
+# Clips already uploaded to YouTube - do not re-upload
+# One clip ID per line
+
+# "When You Flex on the Nut" - uploaded 3x
+DirtyCulturedDonkeyStoneLightning-yVlYdeAnFZp2CNrl
+
+# "Beth Oven" - uploaded 1x
+FrailCarelessVampireHoneyBadger--RXvzjXNd6W5ZfkN
