@@ -29,7 +29,7 @@ pipeline:
   velocity_weight: 2.0
   top_percentile: 0.10
   bootstrap_top_n: 10
-  clip_lookback_hours: 24
+  clip_lookback_hours: 168  # 7 days
   data_dir: "data"
   tmp_dir: "data/tmp"
   db_path: "data/clips.db"
