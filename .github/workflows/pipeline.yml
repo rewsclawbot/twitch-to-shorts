@@ -32,7 +32,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: data/clips.db
-          key: clips-db-${{ github.run_id }}
+          key: clips-db-v1
           restore-keys: |
             clips-db-
 
@@ -51,9 +51,16 @@ jobs:
           NEW_TOKEN=$(base64 -w0 credentials/xqc_youtube.json)
           gh secret set YOUTUBE_TOKEN_XQC --body "$NEW_TOKEN"
 
+      - name: Delete old cache
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: gh cache delete clips-db-v1 || true
+
       - name: Save database
         if: always()
         uses: actions/cache/save@v4
         with:
           path: data/clips.db
-          key: clips-db-${{ github.run_id }}
+          key: clips-db-v1
