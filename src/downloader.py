@@ -47,19 +47,27 @@ def download_clip(clip: Clip, tmp_dir: str) -> str | None:
         log.error("yt-dlp not found. Install with: pip install yt-dlp")
         return None
 
-    if not os.path.exists(tmp_path) or not _is_valid_video(tmp_path):
-        log.error("Download produced invalid file: %s", clip.id)
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+    # yt-dlp may remux (e.g. TS→MP4) and write to output_path instead of tmp_path
+    if os.path.exists(tmp_path):
+        actual_path = tmp_path
+    elif os.path.exists(output_path):
+        actual_path = output_path
+    else:
+        log.error("Download produced no file: %s", clip.id)
         return None
 
-    try:
-        os.replace(tmp_path, output_path)
-    except OSError as e:
-        log.error("Failed to finalize download for %s: %s", clip.id, e)
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+    if not _is_valid_video(actual_path):
+        log.error("Download produced invalid file: %s", clip.id)
+        os.remove(actual_path)
         return None
+
+    if actual_path != output_path:
+        try:
+            os.replace(actual_path, output_path)
+        except OSError as e:
+            log.error("Failed to finalize download for %s: %s", clip.id, e)
+            os.remove(actual_path)
+            return None
 
     log.info("Downloaded clip %s (%d bytes)", clip.id, os.path.getsize(output_path))
     return output_path
