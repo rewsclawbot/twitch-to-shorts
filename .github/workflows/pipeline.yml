@@ -4,6 +4,10 @@ on:
     - cron: '0 */4 * * *'
   workflow_dispatch:
 
+concurrency:
+  group: pipeline-run
+  cancel-in-progress: false
+
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
@@ -54,12 +58,17 @@ jobs:
           NEW_TOKEN=$(base64 -w0 credentials/xqc_youtube.json)
           gh secret set YOUTUBE_TOKEN_XQC --body "$NEW_TOKEN"
 
+      - name: Checkpoint WAL before cache save
+        if: always()
+        continue-on-error: true
+        run: sqlite3 data/clips.db "PRAGMA wal_checkpoint(TRUNCATE)"
+
       - name: Delete old cache
         if: always()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh cache delete clips-db-v1 || true
+        run: gh cache delete clips-db-v1
 
       - name: Save database
         if: always()
