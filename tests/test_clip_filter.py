@@ -2,7 +2,7 @@ from datetime import datetime, timezone, timedelta
 
 import pytest
 
-from src.clip_filter import compute_score, filter_and_rank
+from src.clip_filter import compute_score, compute_score_with_options, filter_and_rank
 from tests.conftest import make_clip
 
 
@@ -49,6 +49,27 @@ class TestComputeScore:
         score_high = compute_score(clip, velocity_weight=4.0)
         assert score_high > score_low
 
+    def test_log_age_decay_increases_score_for_older_clips(self):
+        clip = make_clip(
+            view_count=1000,
+            created_at=(datetime.now(timezone.utc) - timedelta(hours=6)).isoformat(),
+        )
+        linear = compute_score_with_options(clip, age_decay="linear")
+        log_decay = compute_score_with_options(clip, age_decay="log")
+        assert log_decay > linear
+
+    def test_log_view_transform_reduces_score(self):
+        clip = make_clip(view_count=1000)
+        linear = compute_score_with_options(clip, view_transform="linear")
+        log_view = compute_score_with_options(clip, view_transform="log")
+        assert linear > log_view
+
+    def test_title_quality_bonus_increases_score(self):
+        clip = make_clip(title="OMG!!! 1v5 CLUTCH")
+        base = compute_score_with_options(clip, title_quality_weight=0.0)
+        boosted = compute_score_with_options(clip, title_quality_weight=0.1)
+        assert boosted > base
+
 
 class TestFilterAndRank:
     def test_empty_input_returns_empty(self, conn):
@@ -88,3 +109,13 @@ class TestFilterAndRank:
         result = filter_and_rank(conn, clips, "s")
         assert result[0].score > 0
         assert isinstance(result[0].score, float)
+
+    def test_min_view_count_filters_clips(self, conn):
+        clips = [
+            make_clip(clip_id="low_1", view_count=100),
+            make_clip(clip_id="low_2", view_count=200),
+            make_clip(clip_id="high_1", view_count=1000),
+        ]
+        result = filter_and_rank(conn, clips, "s", min_view_count=500, bootstrap_top_n=10)
+        assert len(result) == 1
+        assert result[0].id == "high_1"

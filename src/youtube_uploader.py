@@ -1,5 +1,5 @@
-from __future__ import annotations
-
+import hashlib
+import json
 import logging
 import os
 import re
@@ -18,7 +18,11 @@ from src.models import Clip
 
 log = logging.getLogger(__name__)
 
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.readonly",
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
+]
 QUOTA_REASONS = {
     "uploadLimitExceeded",
     "quotaExceeded",
@@ -41,12 +45,30 @@ def _extract_error_reason(err: HttpError) -> str:
     return ""
 
 
-def get_authenticated_service(client_secrets_file: str, credentials_file: str):
-    """Get an authenticated YouTube API service. Runs OAuth flow if needed."""
-    creds = None
+def get_credentials(client_secrets_file: str, credentials_file: str) -> Credentials:
+    """Get OAuth credentials for YouTube APIs. Runs OAuth flow if needed."""
+    creds: Credentials | None = None
+    stored_scopes: list[str] | None = None
 
     if os.path.exists(credentials_file):
+        try:
+            with open(credentials_file, "r", encoding="utf-8") as f:
+                stored_scopes = (json.load(f).get("scopes") or [])
+        except (OSError, json.JSONDecodeError):
+            stored_scopes = None
         creds = Credentials.from_authorized_user_file(credentials_file, SCOPES)
+
+    if stored_scopes is not None:
+        missing = [scope for scope in SCOPES if scope not in stored_scopes]
+        if missing:
+            log.error(
+                "YouTube credentials missing required scopes: %s. "
+                "Delete the token file and re-authenticate.",
+                ", ".join(missing),
+            )
+            if not sys.stdin.isatty():
+                raise RuntimeError("YouTube credentials missing required scopes")
+            creds = None
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
@@ -72,9 +94,16 @@ def get_authenticated_service(client_secrets_file: str, credentials_file: str):
         creds_dir = os.path.dirname(credentials_file)
         if creds_dir:
             os.makedirs(creds_dir, exist_ok=True)
-        with open(credentials_file, "w") as f:
+        fd = os.open(credentials_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
             f.write(creds.to_json())
 
+    return creds
+
+
+def get_authenticated_service(client_secrets_file: str, credentials_file: str):
+    """Get an authenticated YouTube Data API service."""
+    creds = get_credentials(client_secrets_file, credentials_file)
     return build("youtube", "v3", credentials=creds)
 
 
@@ -90,32 +119,114 @@ def _truncate_title(title: str, max_len: int = 100) -> str:
     return truncated.rstrip() + "..."
 
 
+class _TemplateDict(dict):
+    def __missing__(self, key: str) -> str:
+        log.warning("Template references unknown key: {%s}", key)
+        return ""
+
+
+def _sanitize_text(text: str) -> str:
+    return re.sub(r"[\x00-\x1f<>]", "", text).strip()
+
+
+def _render_template(template: str, clip: Clip) -> str:
+    values = _TemplateDict(
+        title=clip.title,
+        streamer=clip.streamer,
+        game=clip.game_name,
+        game_name=clip.game_name,
+    )
+    return template.format_map(values)
+
+
+def _choose_template(clip_id: str, templates: list[str] | None) -> str | None:
+    if not templates:
+        return None
+    digest = hashlib.md5(clip_id.encode("utf-8")).hexdigest()
+    idx = int(digest, 16) % len(templates)
+    return templates[idx]
+
+
+def _dedupe_tags(tags: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for tag in tags:
+        clean = tag.strip()
+        if not clean:
+            continue
+        key = clean.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(clean)
+    return result
+
+
+def _limit_tag_length(tags: list[str], max_total_len: int = 500) -> list[str]:
+    total = 0
+    limited: list[str] = []
+    for tag in tags:
+        tag_len = len(tag)
+        if limited:
+            tag_len += 1  # comma separator
+        if total + tag_len > max_total_len:
+            break
+        limited.append(tag)
+        total += tag_len
+    return limited
+
+
+def set_thumbnail(service, video_id: str, thumbnail_path: str) -> bool:
+    try:
+        media = MediaFileUpload(thumbnail_path, mimetype="image/jpeg")
+        service.thumbnails().set(videoId=video_id, media_body=media).execute()
+        log.info("Thumbnail set for %s", video_id)
+        return True
+    except HttpError as e:
+        log.warning("Failed to set thumbnail for %s: %s", video_id, e)
+        return False
+
+
 def upload_short(
     service,
     video_path: str,
     clip: Clip,
     category_id: str = "20",
     privacy_status: str = "public",
+    title_template: str | None = None,
+    title_templates: list[str] | None = None,
+    description_template: str | None = None,
+    description_templates: list[str] | None = None,
+    extra_tags: list[str] | None = None,
 ) -> str | None:
     """Upload a video as a YouTube Short. Returns the video ID on success.
 
     Raises QuotaExhaustedError if the YouTube API quota is exceeded.
     """
-    title = clip.title
     streamer_name = clip.streamer
     game_name = clip.game_name
-    description = ""
-    sanitized = re.sub(r"[\x00-\x1f<>]", "", f"{title} | {streamer_name}")
-    full_title = _truncate_title(sanitized)
 
-    if not description:
-        description = f"Clip from {streamer_name}'s stream\n\n#Shorts"
-    elif "#Shorts" not in description:
-        description += "\n\n#Shorts"
+    chosen_title = _choose_template(clip.id, title_templates) or title_template
+    if chosen_title:
+        raw_title = _render_template(chosen_title, clip)
+    else:
+        raw_title = f"{clip.title} | {streamer_name}"
+    full_title = _truncate_title(_sanitize_text(raw_title))
 
-    tags = ["Shorts", streamer_name, "Twitch", "Gaming"]
+    chosen_description = _choose_template(clip.id, description_templates) or description_template
+    if chosen_description:
+        description = _sanitize_text(_render_template(chosen_description, clip))
+    else:
+        description = f"Clip from {streamer_name}'s stream"
+    if "#Shorts" not in description:
+        description = (description + "\n\n#Shorts") if description else "#Shorts"
+
+    tags = ["Shorts", streamer_name, "Twitch", "Gaming", "Highlights", "Clips"]
     if game_name:
         tags.append(game_name)
+    if extra_tags:
+        tags.extend(extra_tags)
+    tags = _limit_tag_length(_dedupe_tags(tags))
 
     body = {
         "snippet": {
@@ -136,10 +247,13 @@ def upload_short(
     try:
         request = service.videos().insert(part="snippet,status", body=body, media_body=media)
         response = None
-        while response is None:
+        max_chunks = 1000
+        chunks = 0
+        while response is None and chunks < max_chunks:
             for attempt in range(4):
                 try:
                     _, response = request.next_chunk()
+                    chunks += 1
                     break
                 except (HttpError, ConnectionError, TimeoutError) as err:
                     retryable = not isinstance(err, HttpError) or err.resp.status >= 500
@@ -149,6 +263,8 @@ def upload_short(
                         time.sleep(delay)
                     else:
                         raise
+        if response is None:
+            raise RuntimeError("Upload did not complete after maximum chunk attempts")
 
         video_id = response["id"]
         log.info("Upload successful: https://youtube.com/shorts/%s", video_id)
@@ -159,12 +275,12 @@ def upload_short(
             log.error("YouTube quota exhausted: %s", reason)
             raise QuotaExhaustedError(reason) from e
         if e.resp.status == 403:
-            log.error("YouTube 403 forbidden for %s: %s", title, reason or "unknown")
+            log.error("YouTube 403 forbidden for %s: %s", full_title, reason or "unknown")
             return None
-        log.exception("Upload failed for %s (status=%s reason=%s)", title, e.resp.status, reason or "unknown")
+        log.exception("Upload failed for %s (status=%s reason=%s)", full_title, e.resp.status, reason or "unknown")
         return None
     except Exception:
-        log.exception("Upload failed for %s", title)
+        log.exception("Upload failed for %s", full_title)
         return None
 
 
@@ -182,13 +298,15 @@ def verify_upload(service, video_id: str) -> bool:
         log.warning("Video %s has unexpected status: %s", video_id, status)
         return status != "rejected"
     except HttpError as e:
-        # Scope insufficient — we only have upload scope, not readonly
-        # Trust the upload succeeded since upload_short returned a video ID
         if e.resp.status == 403 and "insufficientPermissions" in str(e):
-            log.info("Skipping verification for %s (no readonly scope) — trusting upload", video_id)
-            return True
-        log.exception("Failed to verify upload %s — assuming failure", video_id)
+            log.error(
+                "Insufficient permissions to verify upload %s. "
+                "Re-authenticate with youtube.readonly scope.",
+                video_id,
+            )
+            return False
+        log.exception("Failed to verify upload %s - assuming failure", video_id)
         return False
     except Exception:
-        log.exception("Failed to verify upload %s — assuming failure", video_id)
+        log.exception("Failed to verify upload %s - assuming failure", video_id)
         return False

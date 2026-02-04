@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 import logging
 import os
@@ -11,39 +9,15 @@ from src.models import FacecamConfig
 
 log = logging.getLogger(__name__)
 
-
-def _find_ffmpeg() -> str:
-    """Find ffmpeg binary, checking PATH then common Windows install locations."""
-    path = shutil.which("ffmpeg")
-    if path:
-        return path
-    # WinGet install location
-    winget_base = os.path.join(
-        os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WinGet", "Packages"
-    )
-    if os.path.isdir(winget_base):
-        for entry in os.listdir(winget_base):
-            if "FFmpeg" in entry:
-                candidate = os.path.join(winget_base, entry)
-                for root, dirs, files in os.walk(candidate):
-                    if "ffmpeg.exe" in files:
-                        return os.path.join(root, "ffmpeg.exe")
-    return "ffmpeg"  # last resort, hope it's on PATH
+FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
+FFPROBE = shutil.which("ffprobe") or "ffprobe"
 
 
-def _find_ffprobe(ffmpeg_path: str) -> str:
-    """Find ffprobe binary alongside the resolved ffmpeg path."""
-    path = shutil.which("ffprobe")
-    if path:
-        return path
-    ffprobe = os.path.join(os.path.dirname(ffmpeg_path), "ffprobe.exe")
-    if os.path.isfile(ffprobe):
-        return ffprobe
-    return "ffprobe"
-
-
-FFMPEG = _find_ffmpeg()
-FFPROBE = _find_ffprobe(FFMPEG)
+def _remove_file(path: str):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def _get_duration(path: str) -> float | None:
@@ -76,6 +50,76 @@ def _get_dimensions(path: str) -> tuple[int, int] | None:
         return None
 
 
+def _sample_ydif(input_path: str, timestamp: float) -> float:
+    cmd = [
+        FFMPEG, "-ss", f"{timestamp:.2f}", "-i", input_path,
+        "-vf", "signalstats,metadata=print",
+        "-frames:v", "1",
+        "-f", "null", "-",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        values: list[float] = []
+        for line in result.stderr.splitlines():
+            if "signalstats.YDIF=" in line:
+                try:
+                    values.append(float(line.split("YDIF=")[1]))
+                except (ValueError, IndexError):
+                    pass
+        return max(values) if values else 0.0
+    except Exception as e:
+        log.warning("Thumbnail motion sampling failed at %.2fs: %s", timestamp, e)
+        return 0.0
+
+
+def extract_thumbnail(
+    input_path: str,
+    tmp_dir: str,
+    samples: int = 8,
+    width: int = 1280,
+) -> str | None:
+    """Extract a thumbnail from the most active frame in the clip."""
+    os.makedirs(tmp_dir, exist_ok=True)
+    clip_id = os.path.splitext(os.path.basename(input_path))[0]
+    output_path = os.path.join(tmp_dir, f"{clip_id}_thumb.jpg")
+
+    duration = _get_duration(input_path)
+    if not duration or duration <= 0:
+        return None
+    if samples <= 0:
+        return None
+
+    step = duration / (samples + 1)
+    timestamps = [max(0.1, min(duration - 0.1, step * (i + 1))) for i in range(samples)]
+
+    best_ts = timestamps[0]
+    best_score = -1.0
+    for ts in timestamps:
+        score = _sample_ydif(input_path, ts)
+        if score > best_score:
+            best_score = score
+            best_ts = ts
+
+    cmd = [
+        FFMPEG, "-ss", f"{best_ts:.2f}", "-i", input_path,
+        "-frames:v", "1",
+        "-vf", f"scale={width}:-2",
+        "-q:v", "2",
+        output_path,
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=30)
+    except Exception as e:
+        log.warning("Thumbnail extraction failed for %s: %s", clip_id, e)
+        _remove_file(output_path)
+        return None
+
+    if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+        _remove_file(output_path)
+        return None
+    return output_path
+
+
 def _detect_leading_silence(input_path: str, threshold_db: float = -30, min_duration: float = 0.5) -> float:
     """Return duration of leading silence in seconds (0.0 if none). Capped at 5s."""
     cmd = [
@@ -99,7 +143,8 @@ def _detect_leading_silence(input_path: str, threshold_db: float = -30, min_dura
 
 
 def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
-                     facecam: FacecamConfig | None = None) -> str | None:
+                     facecam: FacecamConfig | None = None,
+                     facecam_mode: str = "auto") -> str | None:
     """Crop a 16:9 video to 9:16 vertical (1080x1920) with facecam+gameplay layout.
 
     If facecam config is provided, output is split: top 20% facecam, bottom 80% gameplay.
@@ -122,7 +167,17 @@ def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
     if silence_offset > 0:
         log.info("Trimming %.2fs leading silence from %s", silence_offset, clip_id)
 
-    use_facecam = facecam and _has_facecam(input_path, facecam, clip_id, duration=duration)
+    mode = (facecam_mode or "auto").lower()
+    if mode not in ("auto", "always", "off"):
+        log.warning("Unknown facecam_mode '%s', defaulting to 'auto'", facecam_mode)
+        mode = "auto"
+
+    if not facecam or mode == "off":
+        use_facecam = False
+    elif mode == "always":
+        use_facecam = True
+    else:
+        use_facecam = _has_facecam(input_path, facecam, clip_id, duration=duration)
 
     # Probe source dimensions for non-16:9 handling
     dims = _get_dimensions(input_path)
@@ -215,15 +270,10 @@ def _measure_loudness(input_path: str) -> dict | None:
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         stderr = result.stderr
-        # loudnorm JSON block appears after the last '{' in stderr
-        json_start = stderr.rfind("{\n")
-        if json_start == -1:
-            json_start = stderr.rfind("{")
-        if json_start == -1:
+        matches = list(re.finditer(r"\{[^{}]*\"input_i\"[^{}]*\}", stderr, re.DOTALL))
+        if not matches:
             return None
-        json_str = stderr[json_start:]
-        json_end = json_str.rfind("}") + 1
-        data = json.loads(json_str[:json_end])
+        data = json.loads(matches[-1].group(0))
         keys = ["input_i", "input_tp", "input_lra", "input_thresh", "target_offset"]
         if all(k in data for k in keys):
             return {k: data[k] for k in keys}
@@ -310,29 +360,25 @@ def _run_ffmpeg(input_path: str, output_path: str, vf: str,
             proc.kill()
             proc.wait()
             log.error("FFmpeg %s timed out for %s", label, clip_id)
-            if os.path.exists(tmp_output):
-                os.remove(tmp_output)
+            _remove_file(tmp_output)
             return False
 
         if proc.returncode != 0:
             log.warning("FFmpeg %s failed for %s: %s", label, clip_id,
                         stderr_bytes.decode(errors="replace")[-500:])
-            if os.path.exists(tmp_output):
-                os.remove(tmp_output)
+            _remove_file(tmp_output)
             return False
     except Exception as e:
         log.error("FFmpeg %s error for %s: %s", label, clip_id, e)
         if proc and proc.poll() is None:
             proc.kill()
             proc.wait()
-        if os.path.exists(tmp_output):
-            os.remove(tmp_output)
+        _remove_file(tmp_output)
         return False
 
     if not os.path.exists(tmp_output) or os.path.getsize(tmp_output) == 0:
         log.error("FFmpeg %s produced empty output for %s", label, clip_id)
-        if os.path.exists(tmp_output):
-            os.remove(tmp_output)
+        _remove_file(tmp_output)
         return False
 
     os.replace(tmp_output, output_path)

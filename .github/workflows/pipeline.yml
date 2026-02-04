@@ -33,11 +33,11 @@ jobs:
       - name: Restore credentials
         env:
           YOUTUBE_CLIENT_SECRETS: ${{ secrets.YOUTUBE_CLIENT_SECRETS }}
-          YOUTUBE_TOKEN_XQC: ${{ secrets.YOUTUBE_TOKEN_XQC }}
+          YOUTUBE_TOKEN_THEBURNTPEANUT: ${{ secrets.YOUTUBE_TOKEN_THEBURNTPEANUT }}
         run: |
           mkdir -p credentials
           printf '%s' "$YOUTUBE_CLIENT_SECRETS" | base64 -d > credentials/client_secret.json
-          printf '%s' "$YOUTUBE_TOKEN_XQC" | base64 -d > credentials/xqc_youtube.json
+          printf '%s' "$YOUTUBE_TOKEN_THEBURNTPEANUT" | base64 -d > credentials/theburntpeanut_youtube.json
 
       - name: Restore database
         uses: actions/cache/restore@v4
@@ -59,8 +59,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          NEW_TOKEN=$(base64 -w0 credentials/xqc_youtube.json)
-          gh secret set YOUTUBE_TOKEN_XQC --body "$NEW_TOKEN"
+          base64 -w0 credentials/theburntpeanut_youtube.json | gh secret set YOUTUBE_TOKEN_THEBURNTPEANUT --body -
 
       - name: Checkpoint WAL before cache save
         if: always()

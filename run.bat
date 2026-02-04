@@ -1,3 +1,3 @@
 @echo off
 cd /d "%~dp0"
-"%LOCALAPPDATA%\Programs\Python\Python312\python.exe" main.py
+python main.py 2>nul || py -3.12 main.py

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import logging
 import time
 from datetime import datetime, timedelta, timezone
@@ -47,19 +45,26 @@ class TwitchClient:
     def _request(self, method: str, url: str, **kwargs) -> requests.Response:
         if "timeout" not in kwargs:
             kwargs["timeout"] = DEFAULT_TIMEOUT
-        resp = requests.request(method, url, headers=self._headers(), **kwargs)
-        if resp.status_code == 401:
-            self._token = None
+        resp: requests.Response | None = None
+        for attempt in range(3):
             resp = requests.request(method, url, headers=self._headers(), **kwargs)
-        if resp.status_code == 429:
-            reset = resp.headers.get("Ratelimit-Reset")
-            try:
-                wait = min(max(int(reset) - int(time.time()), 1), 60)
-            except (ValueError, TypeError):
-                wait = 5
-            log.warning("Rate limited by Twitch, waiting %ds", wait)
-            time.sleep(wait)
-            resp = requests.request(method, url, headers=self._headers(), **kwargs)
+            if resp.status_code == 401:
+                self._token = None
+                if attempt < 2:
+                    continue
+            if resp.status_code == 429:
+                reset = resp.headers.get("Ratelimit-Reset")
+                try:
+                    wait = min(max(int(reset) - int(time.time()), 1), 60)
+                except (ValueError, TypeError):
+                    wait = 5
+                log.warning("Rate limited by Twitch, waiting %ds", wait)
+                time.sleep(wait)
+                if attempt < 2:
+                    continue
+            resp.raise_for_status()
+            return resp
+        assert resp is not None
         resp.raise_for_status()
         return resp
 
@@ -100,17 +105,20 @@ class TwitchClient:
 
             data = resp.json()
             for c in data.get("data", []):
-                clips.append(Clip(
-                    id=c["id"],
-                    url=c["url"],
-                    title=c["title"],
-                    view_count=c["view_count"],
-                    created_at=c["created_at"],
-                    thumbnail_url=c["thumbnail_url"],
-                    duration=c["duration"],
-                    broadcaster_name=c["broadcaster_name"],
-                    game_id=c.get("game_id", ""),
-                ))
+                try:
+                    clip = Clip(
+                        id=c["id"],
+                        url=c["url"],
+                        title=c["title"],
+                        view_count=c["view_count"],
+                        created_at=c["created_at"],
+                        duration=c["duration"],
+                        game_id=c.get("game_id", ""),
+                    )
+                except (KeyError, TypeError) as e:
+                    log.warning("Skipping malformed clip data: %s", e)
+                    continue
+                clips.append(clip)
 
             cursor = data.get("pagination", {}).get("cursor")
             if not cursor or not data.get("data") or len(clips) >= max_clips:

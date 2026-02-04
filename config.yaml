@@ -5,17 +5,35 @@ twitch:
 youtube:
   # Path to OAuth client secrets JSON downloaded from Google Cloud Console
   client_secrets_file: "credentials/client_secret.json"
+  # Optional templates:
+  # title_template: "{title} | {streamer}"
+  # description_template: "Clip from {streamer}'s stream\n\n#Shorts"
+  # Optional A/B title/description templates:
+  # title_templates:
+  #   - "{title} | {streamer}"
+  #   - "{streamer} POPS OFF | {game}"
+  # description_templates:
+  #   - "Clip from {streamer}'s stream\n\n#Shorts"
+  #   - "{streamer} highlights\n\n#Shorts"
+  # Optional tags applied to every upload:
+  # extra_tags: ["Highlights", "Clips"]
+  # Optional thumbnails:
+  # thumbnail_enabled: true
+  # thumbnail_samples: 8
+  # thumbnail_width: 1280
 
 streamers:
   - name: "TheBurntPeanut"
     twitch_id: "472066926"
-    youtube_credentials: "credentials/xqc_youtube.json"
+    youtube_credentials: "credentials/theburntpeanut_youtube.json"
     facecam:
       x: 0.15   # offset from left edge
       y: 0.62   # lower to capture body
       w: 0.18   # ~18% of source width
       h: 0.34   # taller to capture body
       output_w: 420  # facecam width in output (pixels)
+    # facecam_mode: "auto"  # auto | always | off
+    # extra_tags: ["TheBurntPeanut", "FPS"]
     privacy_status: "public"
     category_id: "20"
   # Add more streamers here:
@@ -30,9 +48,18 @@ pipeline:
   top_percentile: 0.10
   bootstrap_top_n: 10
   clip_lookback_hours: 168  # 7 days
-  data_dir: "data"
+  # Scoring options (optional)
+  min_view_count: 300
+  age_decay: "log"  # linear | log
+  view_transform: "linear"  # linear | log
+  title_quality_weight: 0.05  # 0.0 disables title bonus
   tmp_dir: "data/tmp"
   db_path: "data/clips.db"
   log_file: "data/pipeline.log"
   upload_spacing_hours: 4
   max_uploads_per_window: 1
+  # Analytics sync (optional)
+  analytics_enabled: false
+  analytics_min_age_hours: 48
+  analytics_sync_interval_hours: 24
+  analytics_max_videos_per_run: 20

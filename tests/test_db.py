@@ -8,6 +8,10 @@ from src.db import (
     recent_upload_count,
     update_streamer_stats,
     clip_overlaps,
+    get_clips_for_metrics,
+    update_youtube_metrics,
+    touch_youtube_metrics_sync,
+    get_streamer_performance_multiplier,
 )
 from tests.conftest import make_clip
 
@@ -133,3 +137,101 @@ class TestClipOverlaps:
         )
         conn.commit()
         assert clip_overlaps(conn, "streamer_b", (base + timedelta(seconds=5)).isoformat()) is False
+
+
+class TestYouTubeMetrics:
+    def test_get_clips_for_metrics_filters_by_age_and_sync(self, conn):
+        now = datetime.now(timezone.utc)
+        recent = (now - timedelta(hours=2)).isoformat()
+        old = (now - timedelta(hours=72)).isoformat()
+        conn.execute(
+            "INSERT INTO clips (clip_id, streamer, posted_at, youtube_id) VALUES (?, ?, ?, ?)",
+            ("recent", "s", recent, "yt_recent"),
+        )
+        conn.execute(
+            "INSERT INTO clips (clip_id, streamer, posted_at, youtube_id, yt_last_sync) VALUES (?, ?, ?, ?, ?)",
+            ("old_synced", "s", old, "yt_old_synced", (now - timedelta(hours=1)).isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO clips (clip_id, streamer, posted_at, youtube_id) VALUES (?, ?, ?, ?)",
+            ("old_unsynced", "s", old, "yt_old_unsynced"),
+        )
+        conn.commit()
+
+        rows = get_clips_for_metrics(conn, "s", min_age_hours=48, sync_interval_hours=24, limit=10)
+        ids = {row["clip_id"] for row in rows}
+        assert "old_unsynced" in ids
+        assert "recent" not in ids
+        assert "old_synced" not in ids
+
+    def test_update_and_touch_metrics(self, conn):
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "INSERT INTO clips (clip_id, streamer, posted_at, youtube_id) VALUES (?, ?, ?, ?)",
+            ("c1", "s", now, "yt1"),
+        )
+        conn.commit()
+
+        update_youtube_metrics(conn, "yt1", {
+            "yt_views": 123,
+            "yt_estimated_minutes_watched": 45.6,
+            "yt_avg_view_duration": 30.0,
+            "yt_avg_view_percentage": 75.0,
+            "yt_impressions": 1000,
+            "yt_impressions_ctr": 2.5,
+            "yt_last_sync": now,
+        })
+        row = conn.execute("SELECT yt_views, yt_impressions, yt_last_sync FROM clips WHERE youtube_id = 'yt1'").fetchone()
+        assert row["yt_views"] == 123
+        assert row["yt_impressions"] == 1000
+        assert row["yt_last_sync"] == now
+
+        later = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        touch_youtube_metrics_sync(conn, "yt1", later)
+        row = conn.execute("SELECT yt_last_sync FROM clips WHERE youtube_id = 'yt1'").fetchone()
+        assert row["yt_last_sync"] == later
+
+
+class TestPerformanceMultiplier:
+    def test_returns_one_with_no_data(self, conn):
+        assert get_streamer_performance_multiplier(conn, "nobody") == 1.0
+
+    def test_returns_one_with_fewer_than_three_data_points(self, conn):
+        now = datetime.now(timezone.utc).isoformat()
+        for i in range(2):
+            conn.execute(
+                "INSERT INTO clips (clip_id, streamer, youtube_id, yt_impressions_ctr) VALUES (?, ?, ?, ?)",
+                (f"pm_{i}", "s", f"yt_{i}", 0.04),
+            )
+        conn.commit()
+        assert get_streamer_performance_multiplier(conn, "s") == 1.0
+
+    def test_high_ctr_boosts_multiplier(self, conn):
+        for i in range(5):
+            conn.execute(
+                "INSERT INTO clips (clip_id, streamer, youtube_id, yt_impressions_ctr) VALUES (?, ?, ?, ?)",
+                (f"hi_{i}", "good", f"yt_hi_{i}", 0.04),
+            )
+        conn.commit()
+        mult = get_streamer_performance_multiplier(conn, "good")
+        assert mult > 1.0
+
+    def test_low_ctr_reduces_multiplier(self, conn):
+        for i in range(5):
+            conn.execute(
+                "INSERT INTO clips (clip_id, streamer, youtube_id, yt_impressions_ctr) VALUES (?, ?, ?, ?)",
+                (f"lo_{i}", "poor", f"yt_lo_{i}", 0.005),
+            )
+        conn.commit()
+        mult = get_streamer_performance_multiplier(conn, "poor")
+        assert mult < 1.0
+
+    def test_multiplier_clamped(self, conn):
+        for i in range(5):
+            conn.execute(
+                "INSERT INTO clips (clip_id, streamer, youtube_id, yt_impressions_ctr) VALUES (?, ?, ?, ?)",
+                (f"ex_{i}", "extreme", f"yt_ex_{i}", 0.20),
+            )
+        conn.commit()
+        mult = get_streamer_performance_multiplier(conn, "extreme")
+        assert mult == 2.0

@@ -1,12 +1,10 @@
-from __future__ import annotations
-
 import argparse
 import logging
 import logging.handlers
 import os
 import sys
-import glob
 import time
+from datetime import datetime, timezone
 
 import yaml
 from dotenv import load_dotenv
@@ -18,9 +16,25 @@ from src.twitch_client import TwitchClient
 from src.clip_filter import filter_and_rank
 from src.dedup import filter_new_clips
 from src.downloader import download_clip
-from src.video_processor import crop_to_vertical
-from src.youtube_uploader import get_authenticated_service, upload_short, verify_upload, QuotaExhaustedError
-from src.db import get_connection, insert_clip, update_streamer_stats, recent_upload_count, increment_fail_count
+from src.video_processor import crop_to_vertical, extract_thumbnail
+from src.youtube_uploader import (
+    get_authenticated_service,
+    upload_short,
+    verify_upload,
+    set_thumbnail,
+    QuotaExhaustedError,
+)
+from src.youtube_analytics import get_analytics_service, fetch_video_metrics
+from src.db import (
+    get_connection,
+    insert_clip,
+    update_streamer_stats,
+    recent_upload_count,
+    increment_fail_count,
+    get_clips_for_metrics,
+    update_youtube_metrics,
+    touch_youtube_metrics_sync,
+)
 
 LOCK_FILE = os.path.join("data", "pipeline.lock")
 
@@ -58,24 +72,98 @@ def load_config(path: str = "config.yaml") -> tuple[PipelineConfig, list[Streame
     return pipeline, streamers, raw
 
 
+def validate_config(streamers: list[StreamerConfig], raw_config: dict, dry_run: bool = False):
+    """Validate required config and environment for a safe run."""
+    errors: list[str] = []
+
+    if not streamers:
+        errors.append("No streamers configured in config.yaml under 'streamers'")
+
+    for s in streamers:
+        name = s.name or "<unnamed>"
+        if not s.name:
+            errors.append("Streamer entry missing 'name'")
+        if not s.twitch_id:
+            errors.append(f"Streamer '{name}' missing 'twitch_id'")
+        if not dry_run and not s.youtube_credentials:
+            errors.append(f"Streamer '{name}' missing 'youtube_credentials'")
+
+    youtube = raw_config.get("youtube") or {}
+    if not dry_run and not youtube.get("client_secrets_file"):
+        errors.append("Missing youtube.client_secrets_file in config.yaml")
+
+    twitch = raw_config.get("twitch") or {}
+    if not (os.environ.get("TWITCH_CLIENT_ID") or twitch.get("client_id")):
+        errors.append("Missing Twitch client ID (set TWITCH_CLIENT_ID)")
+    if not (os.environ.get("TWITCH_CLIENT_SECRET") or twitch.get("client_secret")):
+        errors.append("Missing Twitch client secret (set TWITCH_CLIENT_SECRET)")
+
+    if errors:
+        raise ValueError("Invalid configuration:\n" + "\n".join(f"- {e}" for e in errors))
+
+
 def clean_stale_tmp(tmp_dir: str, max_age_hours: int = 24):
     """Remove stale media/tmp files older than max_age_hours from tmp_dir."""
     if not os.path.isdir(tmp_dir):
         return
     cutoff = time.time() - max_age_hours * 3600
-    patterns = ["*.mp4", "*.mp4.tmp", "*.part", "*.ytdl"]
-    files: list[str] = []
-    for pattern in patterns:
-        files.extend(glob.glob(os.path.join(tmp_dir, pattern)))
-    for f in files:
+    suffixes = (".mp4", ".mp4.tmp", ".part", ".ytdl")
+    for entry in os.scandir(tmp_dir):
+        if not entry.is_file():
+            continue
+        name = entry.name
+        if not any(name.endswith(suffix) for suffix in suffixes):
+            continue
         try:
-            if os.path.getmtime(f) < cutoff:
-                os.remove(f)
+            if entry.stat().st_mtime < cutoff:
+                os.remove(entry.path)
         except OSError as e:
-            log.warning("Failed to delete stale file %s: %s", f, e)
+            log.warning("Failed to delete stale file %s: %s", entry.path, e)
 
 
 log = logging.getLogger(__name__)
+
+
+def _cleanup_tmp_files(*paths: str | None):
+    """Best-effort cleanup for temporary media files."""
+    for path in paths:
+        if not path:
+            continue
+        try:
+            os.remove(path)
+        except OSError as e:
+            log.warning("Failed to remove tmp file %s: %s", path, e)
+
+
+def _sync_streamer_metrics(
+    conn,
+    streamer: str,
+    client_secrets_file: str,
+    credentials_file: str,
+    min_age_hours: int,
+    sync_interval_hours: int,
+    max_videos: int,
+) -> int:
+    service = get_analytics_service(client_secrets_file, credentials_file)
+    rows = get_clips_for_metrics(conn, streamer, min_age_hours, sync_interval_hours, max_videos)
+    if not rows:
+        return 0
+
+    end_date = datetime.now(timezone.utc).date().isoformat()
+    synced = 0
+    for row in rows:
+        youtube_id = row["youtube_id"]
+        posted_at = row["posted_at"]
+        if not youtube_id or not posted_at:
+            continue
+        start_date = datetime.fromisoformat(posted_at).date().isoformat()
+        metrics = fetch_video_metrics(service, youtube_id, start_date, end_date)
+        if metrics:
+            update_youtube_metrics(conn, youtube_id, metrics)
+            synced += 1
+        else:
+            touch_youtube_metrics_sync(conn, youtube_id, datetime.now(timezone.utc).isoformat())
+    return synced
 
 
 def _pid_is_running(pid: int) -> bool:
@@ -155,13 +243,16 @@ def run_pipeline(pipeline: PipelineConfig, streamers: list[StreamerConfig], raw_
     try:
         _run_pipeline_inner(pipeline, streamers, raw_config, conn, log, dry_run=dry_run)
     finally:
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except Exception as e:
+            log.warning("WAL checkpoint failed: %s", e)
         clean_stale_tmp(pipeline.tmp_dir, max_age_hours=1)
         conn.close()
 
 
 def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], raw_config: dict, conn, log, dry_run: bool = False):
 
-    # Read Twitch credentials from environment
     twitch_client_id = os.environ.get("TWITCH_CLIENT_ID") or (raw_config.get("twitch") or {}).get("client_id")
     twitch_client_secret = os.environ.get("TWITCH_CLIENT_SECRET") or (raw_config.get("twitch") or {}).get("client_secret")
     if not twitch_client_id or not twitch_client_secret:
@@ -169,9 +260,22 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
         raise ValueError("TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET must be set")
 
     twitch = TwitchClient(twitch_client_id, twitch_client_secret)
+    youtube_cfg = raw_config.get("youtube") or {}
+    title_template = youtube_cfg.get("title_template")
+    title_templates = youtube_cfg.get("title_templates")
+    description_template = youtube_cfg.get("description_template")
+    description_templates = youtube_cfg.get("description_templates")
+    thumbnail_enabled = bool(youtube_cfg.get("thumbnail_enabled", False))
+    thumbnail_samples = int(youtube_cfg.get("thumbnail_samples", 8))
+    thumbnail_width = int(youtube_cfg.get("thumbnail_width", 1280))
+    extra_tags_global = youtube_cfg.get("extra_tags") or []
 
-    # Clean stale tmp files at startup
-    clean_stale_tmp(cfg.tmp_dir)
+    if isinstance(title_templates, str):
+        title_templates = [title_templates]
+    if isinstance(description_templates, str):
+        description_templates = [description_templates]
+    if isinstance(extra_tags_global, str):
+        extra_tags_global = [extra_tags_global]
 
     total_fetched = 0
     total_filtered = 0
@@ -185,7 +289,6 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
         twitch_id = streamer.twitch_id
         log.info("=== Processing streamer: %s ===", name)
 
-        # 1. Fetch clips
         try:
             clips = twitch.fetch_clips(twitch_id, cfg.clip_lookback_hours)
         except Exception:
@@ -198,20 +301,22 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
 
         total_fetched += len(clips)
 
-        # Tag clips with streamer name
         for c in clips:
             c.streamer = name
 
-        # 2. Filter & rank
         ranked = filter_and_rank(
             conn, clips, name,
             velocity_weight=cfg.velocity_weight,
+            min_view_count=cfg.min_view_count,
             top_percentile=cfg.top_percentile,
             bootstrap_top_n=cfg.bootstrap_top_n,
             max_clips=cfg.max_clips_per_streamer,
+            age_decay=cfg.age_decay,
+            view_transform=cfg.view_transform,
+            title_quality_weight=cfg.title_quality_weight,
+            analytics_enabled=cfg.analytics_enabled,
         )
 
-        # 3. Deduplicate
         new_clips = filter_new_clips(conn, ranked)
         total_filtered += len(new_clips)
         log.info("%d new clips after dedup (from %d ranked)", len(new_clips), len(ranked))
@@ -219,7 +324,6 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
         if not new_clips:
             continue
 
-        # Resolve game names for tags
         game_ids = [c.game_id for c in new_clips]
         try:
             game_names = twitch.get_game_names(game_ids)
@@ -236,12 +340,11 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
             log.info("Skipping uploads for %s: %d uploaded in last %dh", name, recent, cfg.upload_spacing_hours)
             continue
 
-        # Get YouTube service for this streamer (skip in dry-run)
         yt_service = None
         if not dry_run:
             try:
                 yt_service = get_authenticated_service(
-                    raw_config["youtube"]["client_secrets_file"],
+                    youtube_cfg["client_secrets_file"],
                     streamer.youtube_credentials,
                 )
             except Exception:
@@ -252,34 +355,30 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
         consecutive_403s = 0
         max_duration = cfg.max_clip_duration_seconds
         for clip in new_clips[:uploads_remaining]:
-            # Pre-filter by duration before downloading
             if clip.duration > max_duration:
                 log.info("Skipping clip %s (%.1fs > %ds max duration)", clip.id, clip.duration, max_duration)
                 continue
 
-            # 4. Download
             video_path = download_clip(clip, cfg.tmp_dir)
             if not video_path:
+                increment_fail_count(conn, clip)
                 total_failed += 1
                 continue
             total_downloaded += 1
 
-            # 5. Process video
             vertical_path = crop_to_vertical(
                 video_path, cfg.tmp_dir, cfg.max_clip_duration_seconds,
                 facecam=streamer.facecam,
+                facecam_mode=streamer.facecam_mode,
             )
+            thumbnail_path = None
             if not vertical_path:
                 increment_fail_count(conn, clip)
                 total_failed += 1
-                try:
-                    os.remove(video_path)
-                except OSError:
-                    pass
+                _cleanup_tmp_files(video_path)
                 continue
             total_processed += 1
 
-            # 6. Upload (skip in dry-run)
             if dry_run:
                 log.info("[DRY RUN] Would upload clip %s: %s", clip.id, clip.title)
                 total_uploaded += 1
@@ -288,17 +387,23 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
             try:
                 youtube_id = upload_short(yt_service, vertical_path, clip,
                                          category_id=streamer.category_id,
-                                         privacy_status=streamer.privacy_status)
+                                         privacy_status=streamer.privacy_status,
+                                         title_template=title_template,
+                                         title_templates=title_templates,
+                                         description_template=description_template,
+                                         description_templates=description_templates,
+                                         extra_tags=(extra_tags_global or []) + (streamer.extra_tags or []))
             except QuotaExhaustedError:
                 log.warning("YouTube quota exhausted — stopping uploads for this run")
+                _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
                 quota_exhausted = True
                 break
 
-            # 7. Verify & record in DB only after successful upload
             if not youtube_id:
                 increment_fail_count(conn, clip)
                 total_failed += 1
                 consecutive_403s += 1
+                _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
                 if consecutive_403s >= 3:
                     log.warning("3 consecutive upload failures for %s — skipping remaining clips", name)
                     break
@@ -308,7 +413,18 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
                 log.warning("Upload verification failed for clip %s (yt=%s), skipping DB insert", clip.id, youtube_id)
                 increment_fail_count(conn, clip)
                 total_failed += 1
+                _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
                 continue
+
+            if thumbnail_enabled:
+                thumbnail_path = extract_thumbnail(
+                    vertical_path,
+                    cfg.tmp_dir,
+                    samples=thumbnail_samples,
+                    width=thumbnail_width,
+                )
+                if thumbnail_path:
+                    set_thumbnail(yt_service, youtube_id, thumbnail_path)
 
             consecutive_403s = 0
             clip.youtube_id = youtube_id
@@ -316,15 +432,25 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
             total_uploaded += 1
             log.info("Uploaded clip %s -> YouTube %s", clip.id, youtube_id)
 
-            # Clean up tmp files after successful upload
-            for tmp_path in (video_path, vertical_path):
-                try:
-                    os.remove(tmp_path)
-                except OSError as e:
-                    log.warning("Failed to remove tmp file %s: %s", tmp_path, e)
+            _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
 
-        # Update rolling stats
         update_streamer_stats(conn, name)
+
+        if cfg.analytics_enabled and not dry_run:
+            try:
+                synced = _sync_streamer_metrics(
+                    conn,
+                    name,
+                    youtube_cfg["client_secrets_file"],
+                    streamer.youtube_credentials,
+                    cfg.analytics_min_age_hours,
+                    cfg.analytics_sync_interval_hours,
+                    cfg.analytics_max_videos_per_run,
+                )
+                if synced:
+                    log.info("Synced analytics for %d videos for %s", synced, name)
+            except Exception:
+                log.exception("Analytics sync failed for %s", name)
 
         if quota_exhausted:
             break
@@ -344,6 +470,12 @@ def main():
     pipeline, streamers, raw_config = load_config()
     setup_logging(pipeline.log_file)
     log = logging.getLogger("main")
+
+    try:
+        validate_config(streamers, raw_config, dry_run=args.dry_run)
+    except ValueError as e:
+        log.error(str(e))
+        sys.exit(1)
 
     if not acquire_lock():
         log.error("Pipeline is already running (lockfile: %s). Exiting.", LOCK_FILE)

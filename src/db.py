@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import sqlite3
 import os
 from datetime import datetime, timedelta, timezone
@@ -26,7 +24,14 @@ def init_schema(conn: sqlite3.Connection):
             created_at TEXT,
             posted_at TEXT,
             youtube_id TEXT,
-            fail_count INTEGER DEFAULT 0
+            fail_count INTEGER DEFAULT 0,
+            yt_views INTEGER,
+            yt_estimated_minutes_watched REAL,
+            yt_avg_view_duration REAL,
+            yt_avg_view_percentage REAL,
+            yt_impressions INTEGER,
+            yt_impressions_ctr REAL,
+            yt_last_sync TEXT
         );
 
         CREATE TABLE IF NOT EXISTS streamer_stats (
@@ -43,6 +48,20 @@ def init_schema(conn: sqlite3.Connection):
     cols = {row[1] for row in conn.execute("PRAGMA table_info(clips)").fetchall()}
     if "fail_count" not in cols:
         conn.execute("ALTER TABLE clips ADD COLUMN fail_count INTEGER DEFAULT 0")
+    if "yt_views" not in cols:
+        conn.execute("ALTER TABLE clips ADD COLUMN yt_views INTEGER")
+    if "yt_estimated_minutes_watched" not in cols:
+        conn.execute("ALTER TABLE clips ADD COLUMN yt_estimated_minutes_watched REAL")
+    if "yt_avg_view_duration" not in cols:
+        conn.execute("ALTER TABLE clips ADD COLUMN yt_avg_view_duration REAL")
+    if "yt_avg_view_percentage" not in cols:
+        conn.execute("ALTER TABLE clips ADD COLUMN yt_avg_view_percentage REAL")
+    if "yt_impressions" not in cols:
+        conn.execute("ALTER TABLE clips ADD COLUMN yt_impressions INTEGER")
+    if "yt_impressions_ctr" not in cols:
+        conn.execute("ALTER TABLE clips ADD COLUMN yt_impressions_ctr REAL")
+    if "yt_last_sync" not in cols:
+        conn.execute("ALTER TABLE clips ADD COLUMN yt_last_sync TEXT")
 
 
 def clip_overlaps(conn: sqlite3.Connection, streamer: str, created_at: str, window_seconds: int = 30) -> bool:
@@ -115,5 +134,88 @@ def increment_fail_count(conn: sqlite3.Connection, clip: Clip):
         (clip.id, clip.streamer, clip.created_at),
     )
     conn.commit()
+
+
+def get_clips_for_metrics(
+    conn: sqlite3.Connection,
+    streamer: str,
+    min_age_hours: int,
+    sync_interval_hours: int,
+    limit: int,
+) -> list[sqlite3.Row]:
+    now = datetime.now(timezone.utc)
+    min_posted_at = (now - timedelta(hours=min_age_hours)).isoformat()
+    min_sync = (now - timedelta(hours=sync_interval_hours)).isoformat()
+    rows = conn.execute(
+        """SELECT clip_id, youtube_id, posted_at
+           FROM clips
+           WHERE streamer = ?
+             AND youtube_id IS NOT NULL
+             AND posted_at <= ?
+             AND (yt_last_sync IS NULL OR yt_last_sync <= ?)
+           ORDER BY posted_at DESC
+           LIMIT ?""",
+        (streamer, min_posted_at, min_sync, limit),
+    ).fetchall()
+    return rows
+
+
+def update_youtube_metrics(conn: sqlite3.Connection, youtube_id: str, metrics: dict):
+    conn.execute(
+        """UPDATE clips
+           SET yt_views = ?,
+               yt_estimated_minutes_watched = ?,
+               yt_avg_view_duration = ?,
+               yt_avg_view_percentage = ?,
+               yt_impressions = ?,
+               yt_impressions_ctr = ?,
+               yt_last_sync = ?
+           WHERE youtube_id = ?""",
+        (
+            metrics.get("yt_views"),
+            metrics.get("yt_estimated_minutes_watched"),
+            metrics.get("yt_avg_view_duration"),
+            metrics.get("yt_avg_view_percentage"),
+            metrics.get("yt_impressions"),
+            metrics.get("yt_impressions_ctr"),
+            metrics.get("yt_last_sync"),
+            youtube_id,
+        ),
+    )
+    conn.commit()
+
+
+def touch_youtube_metrics_sync(conn: sqlite3.Connection, youtube_id: str, synced_at: str):
+    conn.execute(
+        "UPDATE clips SET yt_last_sync = ? WHERE youtube_id = ?",
+        (synced_at, youtube_id),
+    )
+    conn.commit()
+
+
+def get_streamer_performance_multiplier(conn: sqlite3.Connection, streamer: str) -> float:
+    """Compute a performance multiplier from past YouTube analytics for this streamer.
+
+    Returns a value centered on 1.0:
+    - >1.0 if past uploads outperform baseline (avg CTR > 2%)
+    - <1.0 if past uploads underperform baseline
+    - 1.0 if no analytics data available (no effect on scoring)
+    """
+    row = conn.execute(
+        """SELECT AVG(yt_impressions_ctr) as avg_ctr, COUNT(*) as cnt
+           FROM clips
+           WHERE streamer = ? AND yt_impressions_ctr IS NOT NULL""",
+        (streamer,),
+    ).fetchone()
+    if not row or row["cnt"] < 3:
+        return 1.0
+    avg_ctr = row["avg_ctr"]
+    if avg_ctr is None or avg_ctr <= 0:
+        return 1.0
+    # Baseline CTR for Shorts is ~2%. Scale linearly: 2% -> 1.0, 4% -> 1.5, 1% -> 0.75
+    # Clamped to [0.5, 2.0] to avoid extreme swings
+    baseline_ctr = 0.02
+    multiplier = 0.5 + 0.5 * (avg_ctr / baseline_ctr)
+    return max(0.5, min(2.0, multiplier))
 
 
