@@ -62,26 +62,26 @@ jobs:
           base64 -w0 credentials/theburntpeanut_youtube.json | gh secret set YOUTUBE_TOKEN_THEBURNTPEANUT --body -
 
       - name: Checkpoint WAL before cache save
-        if: always()
+        if: success()
         continue-on-error: true
         run: sqlite3 data/clips.db "PRAGMA wal_checkpoint(TRUNCATE)"
 
       - name: Delete old cache
-        if: always()
+        if: success()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh cache delete clips-db-v1
 
       - name: Save database
-        if: always()
+        if: success()
         uses: actions/cache/save@v4
         with:
           path: data/clips.db
           key: clips-db-v1
 
       - name: Upload database artifact
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: clips-db
