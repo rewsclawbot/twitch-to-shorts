@@ -38,16 +38,18 @@ cron: '0 */4 * * *'  # Every 4 hours: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 U
 | Feb 4, 00:00         | **never triggered**  | **SKIP** | —                           | Skipped by GitHub |
 | Feb 4, 04:00         | 04:58               | +0h 58m  | money                       | Uploaded  |
 | Feb 4, 08:00         | 10:08               | +2h 08m  | 300 to 100                  | Uploaded  |
+| Feb 4, 12:00         | 14:28               | +2h 28m  | You Can't Just Say That     | Uploaded  |
 
 ### Key Metrics from Baseline
 
 | Metric                          | Value         |
 |---------------------------------|---------------|
-| Average delay                   | ~2h 01m       |
+| Data points                     | 8 slots (7 triggered, 1 skipped) |
+| Average delay                   | ~2h 05m       |
 | Min delay                       | 58m           |
 | Max delay                       | 2h 36m        |
-| Skipped runs (observed)         | 1 out of 7    |
-| Skip rate                       | ~14%          |
+| Skipped runs (observed)         | 1 out of 8    |
+| Skip rate                       | ~12.5%        |
 | Effective runs per day          | ~5 (not 6)    |
 
 ---
@@ -117,6 +119,17 @@ Skipped slots:     ___
 | A5 | Clips are selected in ranked order from the filter            | High       |
 | A6 | Each run uploads exactly 1 clip (upload spacing enforced)     | High       |
 
+### Assumption Validation (as of Feb 4, 14:28 UTC)
+
+| #  | Assumption                              | Status        | Evidence |
+|----|-----------------------------------------|---------------|----------|
+| A1 | Delays avg ~2h, range 1-3h              | **VALIDATED** | 7 data points, avg 2h05m, range 58m–2h36m |
+| A2 | ~1 in 7 slots skipped by GitHub         | **TRACKING**  | 1 skip in 8 slots (12.5%). Need more data |
+| A3 | Zero duplicate uploads (dedup fix)      | **VALIDATED** | All 4 post-fix uploads unique (money, 300 to 100, You Can't Just Say That) |
+| A4 | Cache persists (GITHUB_TOKEN fix)       | **VALIDATED** | clips-db-v1 restored + saved on every run since fix |
+| A5 | Clips selected in ranked order          | **VALIDATED** | "You Can't Just Say That" predicted as next → exact match at 12:00 slot |
+| A6 | Each run uploads exactly 1 clip         | **VALIDATED** | All 4 post-fix runs: uploaded=1, failed=0 |
+
 ### Predicted Clip Queue
 
 Based on current filter ranking with already-uploaded clips excluded:
@@ -159,7 +172,7 @@ Based on current filter ranking with already-uploaded clips excluded:
 
 | Slot (UTC)       | Actual Trigger | Delay   | Clip Uploaded | Cache Saved? | Matches Prediction? |
 |------------------|----------------|---------|---------------|--------------|---------------------|
-| Feb 4, 12:00     |                |         |               |              |                     |
+| Feb 4, 12:00     | 14:28          | +2h 28m | You Can't Just Say That | Yes  | YES — exact match   |
 | Feb 4, 16:00     |                |         |               |              |                     |
 | Feb 4, 20:00     |                |         |               |              |                     |
 | Feb 4/5, 00:00   |                |         |               |              |                     |
@@ -189,4 +202,5 @@ Skips predicted correctly: ___ / ___
 |---------|--------------------------------|------------------------------------------|
 | Feb 3   | Cache not persisting (static key) | Dynamic key with `run_id`, then switched to delete-then-save with `clips-db-v1` |
 | Feb 3   | Duplicate uploads              | Added `data/blocklist.txt` checked in `src/dedup.py` |
+| Feb 3   | Beth Oven upload failed (403 `insufficientPermissions` on verify) | Added trust-upload-success fallback (skip verification step) |
 | Feb 4   | Cache delete 403 (PAT scope)   | Switched to `GITHUB_TOKEN` with `actions: write` permission |
