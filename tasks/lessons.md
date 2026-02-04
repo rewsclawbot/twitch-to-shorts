@@ -11,11 +11,11 @@
 ## 2026-02-02 — Competition Audit
 
 ### Verify claims empirically before acting
-- Three "critical" bugs from the initial deep audit were false positives:
-  - `os.kill(pid, 0)` on Windows — actually safe since Python 3.2+. Tested.
+- Two "critical" bugs from the initial deep audit were false positives:
   - `julianday()` with `Z` and `+00:00` — both work fine in SQLite. Tested.
   - `bash -e` prevents empty credential overwrite in CI. Tested.
-- **Rule**: If a finding claims something "silently fails" or "does the opposite," run a 3-line test before writing the fix. False positives in an audit erode trust in the real findings.
+- One was a **true positive wrongly dismissed**: `os.kill(pid, 0)` on Windows does NOT reliably detect dead processes. Python's implementation calls `OpenProcess` and returns success for recently-dead PIDs without checking `GetExitCodeProcess`. The proper fix uses ctypes to call `OpenProcess` + `GetExitCodeProcess` against `STILL_ACTIVE (259)`.
+- **Rule**: If a finding claims something "silently fails" or "does the opposite," run a 3-line test before writing the fix. But also re-test your own "disproven" findings — the test itself might have been wrong.
 
 ### Multi-agent audits need a verification pass
 - Deploying multiple agents in parallel produces thorough coverage but also conflicting claims. Two agents said `julianday` was broken, two said it wasn't. Without empirical testing, you'd flip a coin.
@@ -79,3 +79,17 @@
 ### Never revert a working fix before the replacement is proven
 - The `run_id` cache key approach (`8cb34a1`) was working. It was reverted to a static key + delete pattern using a PAT without the right scope. The revert caused a DB reset and more duplicate uploads.
 - **Rule**: Test the replacement with `workflow_dispatch` before reverting what works. The cost of a bad revert is higher than the cost of cache bloat.
+
+## 2026-02-04 — Codex Hardening Review
+
+### `HttpError.error_details` can be a string, not just a list
+- When YouTube (or a WAF/CDN in front of it) returns a non-JSON body, `error_details` is a raw string. Iterating over it yields individual characters, and calling `.get()` on a character crashes with `AttributeError`. This was a pre-existing bug that Codex extracted into a helper without fixing.
+- **Rule**: Always check `isinstance(error_details, list)` before iterating. Don't assume API error responses are always well-structured JSON.
+
+### ctypes on 64-bit Windows needs explicit `restype`
+- `ctypes` defaults to `c_int` (32-bit) return type for all foreign functions. On 64-bit Windows, `HANDLE` is a pointer (64-bit). `OpenProcess` returns a handle that could be truncated to 32 bits, causing silent corruption.
+- **Rule**: Always set `.restype` and `.argtypes` on ctypes foreign function calls. Never rely on the default `c_int` return type.
+
+### Non-quota 403s should skip, not halt — but add a circuit breaker
+- YouTube 403s can be clip-specific (content policy) or channel-level (suspension/strike). Halting the entire pipeline on any 403 is too conservative (wastes remaining quota). Skipping without limit is too aggressive (burns quota on doomed retries if the channel is banned).
+- **Rule**: Skip on 403 but track consecutive failures. After 3 in a row, assume the issue is channel-level and stop uploading for that streamer.

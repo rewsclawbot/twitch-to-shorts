@@ -13,6 +13,7 @@ log = logging.getLogger(__name__)
 TOKEN_URL = "https://id.twitch.tv/oauth2/token"
 CLIPS_URL = "https://api.twitch.tv/helix/clips"
 GAMES_URL = "https://api.twitch.tv/helix/games"
+DEFAULT_TIMEOUT = (5, 15)
 
 
 class TwitchClient:
@@ -29,7 +30,7 @@ class TwitchClient:
             "client_id": self.client_id,
             "client_secret": self.client_secret,
             "grant_type": "client_credentials",
-        })
+        }, timeout=DEFAULT_TIMEOUT)
         resp.raise_for_status()
         data = resp.json()
         self._token = data["access_token"]
@@ -44,6 +45,8 @@ class TwitchClient:
         }
 
     def _request(self, method: str, url: str, **kwargs) -> requests.Response:
+        if "timeout" not in kwargs:
+            kwargs["timeout"] = DEFAULT_TIMEOUT
         resp = requests.request(method, url, headers=self._headers(), **kwargs)
         if resp.status_code == 401:
             self._token = None

@@ -19,10 +19,26 @@ from src.models import Clip
 log = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+QUOTA_REASONS = {
+    "uploadLimitExceeded",
+    "quotaExceeded",
+    "dailyLimitExceeded",
+    "rateLimitExceeded",
+    "userRateLimitExceeded",
+}
 
 
 class QuotaExhaustedError(Exception):
     """Raised when YouTube API quota is exhausted."""
+
+
+def _extract_error_reason(err: HttpError) -> str:
+    if isinstance(err.error_details, list):
+        for detail in err.error_details:
+            reason = detail.get("reason", "")
+            if reason:
+                return reason
+    return ""
 
 
 def get_authenticated_service(client_secrets_file: str, credentials_file: str):
@@ -53,7 +69,9 @@ def get_authenticated_service(client_secrets_file: str, credentials_file: str):
             flow = InstalledAppFlow.from_client_secrets_file(client_secrets_file, SCOPES)
             creds = flow.run_local_server(port=0)
 
-        os.makedirs(os.path.dirname(credentials_file), exist_ok=True)
+        creds_dir = os.path.dirname(credentials_file)
+        if creds_dir:
+            os.makedirs(creds_dir, exist_ok=True)
         with open(credentials_file, "w") as f:
             f.write(creds.to_json())
 
@@ -136,17 +154,14 @@ def upload_short(
         log.info("Upload successful: https://youtube.com/shorts/%s", video_id)
         return video_id
     except HttpError as e:
-        reason = ""
-        if e.error_details:
-            for detail in e.error_details:
-                reason = detail.get("reason", "")
-                if reason in ("uploadLimitExceeded", "quotaExceeded"):
-                    log.error("YouTube quota exhausted: %s", reason)
-                    raise QuotaExhaustedError(reason) from e
+        reason = _extract_error_reason(e)
+        if reason in QUOTA_REASONS:
+            log.error("YouTube quota exhausted: %s", reason)
+            raise QuotaExhaustedError(reason) from e
         if e.resp.status == 403:
-            log.error("YouTube 403 forbidden (likely channel restriction): %s", reason)
-            raise QuotaExhaustedError(f"forbidden:{reason}") from e
-        log.exception("Upload failed for %s", title)
+            log.error("YouTube 403 forbidden for %s: %s", title, reason or "unknown")
+            return None
+        log.exception("Upload failed for %s (status=%s reason=%s)", title, e.resp.status, reason or "unknown")
         return None
     except Exception:
         log.exception("Upload failed for %s", title)

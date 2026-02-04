@@ -59,11 +59,15 @@ def load_config(path: str = "config.yaml") -> tuple[PipelineConfig, list[Streame
 
 
 def clean_stale_tmp(tmp_dir: str, max_age_hours: int = 24):
-    """Remove .mp4 files older than max_age_hours from tmp_dir."""
+    """Remove stale media/tmp files older than max_age_hours from tmp_dir."""
     if not os.path.isdir(tmp_dir):
         return
     cutoff = time.time() - max_age_hours * 3600
-    for f in glob.glob(os.path.join(tmp_dir, "*.mp4")) + glob.glob(os.path.join(tmp_dir, "*.mp4.tmp")):
+    patterns = ["*.mp4", "*.mp4.tmp", "*.part", "*.ytdl"]
+    files: list[str] = []
+    for pattern in patterns:
+        files.extend(glob.glob(os.path.join(tmp_dir, pattern)))
+    for f in files:
         try:
             if os.path.getmtime(f) < cutoff:
                 os.remove(f)
@@ -72,6 +76,39 @@ def clean_stale_tmp(tmp_dir: str, max_age_hours: int = 24):
 
 
 log = logging.getLogger(__name__)
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            err = ctypes.get_last_error()
+            # Access denied: assume the process exists to avoid breaking lock safety.
+            return err == 5
+        try:
+            exit_code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return True
+            return exit_code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    else:
+        try:
+            os.kill(pid, 0)
+            return True
+        except PermissionError:
+            return True
+        except OSError:
+            return False
 
 
 def _try_create_lock() -> bool:
@@ -94,8 +131,8 @@ def acquire_lock() -> bool:
     try:
         with open(LOCK_FILE) as f:
             old_pid = int(f.read().strip())
-        os.kill(old_pid, 0)
-        return False  # Process is alive
+        if _pid_is_running(old_pid):
+            return False  # Process is alive
     except (ValueError, OSError) as e:
         log.warning("Removed stale/corrupt lock file: %s", e)
     try:
@@ -212,6 +249,7 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
                 continue
 
         quota_exhausted = False
+        consecutive_403s = 0
         max_duration = cfg.max_clip_duration_seconds
         for clip in new_clips[:uploads_remaining]:
             # Pre-filter by duration before downloading
@@ -260,6 +298,10 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
             if not youtube_id:
                 increment_fail_count(conn, clip)
                 total_failed += 1
+                consecutive_403s += 1
+                if consecutive_403s >= 3:
+                    log.warning("3 consecutive upload failures for %s — skipping remaining clips", name)
+                    break
                 continue
 
             if not verify_upload(yt_service, youtube_id):
@@ -268,6 +310,7 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
                 total_failed += 1
                 continue
 
+            consecutive_403s = 0
             clip.youtube_id = youtube_id
             insert_clip(conn, clip)
             total_uploaded += 1
