@@ -308,9 +308,6 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
             conn, clips, name,
             velocity_weight=cfg.velocity_weight,
             min_view_count=cfg.min_view_count,
-            top_percentile=cfg.top_percentile,
-            bootstrap_top_n=cfg.bootstrap_top_n,
-            max_clips=cfg.max_clips_per_streamer,
             age_decay=cfg.age_decay,
             view_transform=cfg.view_transform,
             title_quality_weight=cfg.title_quality_weight,
@@ -318,6 +315,7 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
         )
 
         new_clips = filter_new_clips(conn, ranked)
+        new_clips = new_clips[:cfg.max_clips_per_streamer]
         total_filtered += len(new_clips)
         log.info("%d new clips after dedup (from %d ranked)", len(new_clips), len(ranked))
 

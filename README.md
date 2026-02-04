@@ -70,7 +70,7 @@ Indexes: `idx_clips_streamer`, `idx_clips_posted`. Auto-migration adds missing c
 - **`twitch`** — credentials read from env (`TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`), not from file
 - **`youtube`** — `client_secrets_file`, `title_template`/`title_templates` (A/B), `description_template`/`description_templates`, `extra_tags`, `thumbnail_enabled`/`thumbnail_samples`/`thumbnail_width`
 - **`streamers[]`** — `name`, `twitch_id`, `youtube_credentials`, `facecam` (x/y/w/h/output_w), `facecam_mode` (auto|always|off), `privacy_status`, `category_id`, `extra_tags`
-- **`pipeline`** — `max_clips_per_streamer`, `max_clip_duration_seconds`, `velocity_weight`, `top_percentile`, `bootstrap_top_n`, `clip_lookback_hours`, `min_view_count`, `age_decay` (linear|log), `view_transform` (linear|log), `title_quality_weight`, `tmp_dir`, `db_path`, `log_file`, `upload_spacing_hours`, `max_uploads_per_window`, `analytics_enabled`, `analytics_min_age_hours`, `analytics_sync_interval_hours`, `analytics_max_videos_per_run`
+- **`pipeline`** — `max_clips_per_streamer`, `max_clip_duration_seconds`, `velocity_weight`, `clip_lookback_hours`, `min_view_count`, `age_decay` (linear|log), `view_transform` (linear|log), `title_quality_weight`, `tmp_dir`, `db_path`, `log_file`, `upload_spacing_hours`, `max_uploads_per_window`, `analytics_enabled`, `analytics_min_age_hours`, `analytics_sync_interval_hours`, `analytics_max_videos_per_run`
 
 Template placeholders: `{title}`, `{streamer}`, `{game}`, `{game_name}`
 

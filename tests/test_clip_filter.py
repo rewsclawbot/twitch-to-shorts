@@ -75,33 +75,13 @@ class TestFilterAndRank:
     def test_empty_input_returns_empty(self, conn):
         assert filter_and_rank(conn, [], "streamer") == []
 
-    def test_bootstrap_mode_returns_top_n(self, conn):
-        """With no streamer stats, should return up to bootstrap_top_n clips."""
+    def test_returns_all_clips_sorted_by_score(self, conn):
+        """Should return all clips sorted by score descending (no truncation)."""
         clips = [make_clip(clip_id=f"c{i}", view_count=100 * (i + 1)) for i in range(15)]
-        result = filter_and_rank(conn, clips, "newstreamer", bootstrap_top_n=5, max_clips=10)
-        assert len(result) == 5
-        assert result[0].score >= result[-1].score
-
-    def test_steady_state_uses_percentile_threshold(self, conn):
-        """When streamer stats exist, clips are filtered by percentile threshold."""
-        conn.execute(
-            "INSERT INTO streamer_stats (streamer, avg_views_30d, clip_count_30d, last_updated) "
-            "VALUES (?, ?, ?, ?)",
-            ("streamer_a", 500.0, 20, datetime.now(timezone.utc).isoformat()),
-        )
-        conn.commit()
-        clips = [make_clip(clip_id=f"c{i}", view_count=100 * (i + 1)) for i in range(20)]
-        result = filter_and_rank(
-            conn, clips, "streamer_a", top_percentile=0.10, max_clips=10
-        )
-        # top 10% of 20 = 2 clips
-        assert len(result) == 2
-
-    def test_max_clips_limit_respected(self, conn):
-        """Output should never exceed max_clips regardless of input size."""
-        clips = [make_clip(clip_id=f"c{i}", view_count=1000) for i in range(50)]
-        result = filter_and_rank(conn, clips, "s", bootstrap_top_n=50, max_clips=3)
-        assert len(result) == 3
+        result = filter_and_rank(conn, clips, "newstreamer")
+        assert len(result) == 15
+        for i in range(len(result) - 1):
+            assert result[i].score >= result[i + 1].score
 
     def test_clips_have_score_attribute_after_ranking(self, conn):
         """Every returned clip should have a nonzero score populated."""
@@ -116,6 +96,6 @@ class TestFilterAndRank:
             make_clip(clip_id="low_2", view_count=200),
             make_clip(clip_id="high_1", view_count=1000),
         ]
-        result = filter_and_rank(conn, clips, "s", min_view_count=500, bootstrap_top_n=10)
+        result = filter_and_rank(conn, clips, "s", min_view_count=500)
         assert len(result) == 1
         assert result[0].id == "high_1"

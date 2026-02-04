@@ -2,7 +2,7 @@ import logging
 import math
 from datetime import datetime, timezone
 
-from src.db import get_streamer_stats, get_streamer_performance_multiplier
+from src.db import get_streamer_performance_multiplier
 from src.models import Clip
 
 log = logging.getLogger(__name__)
@@ -69,15 +69,12 @@ def filter_and_rank(
     streamer: str,
     velocity_weight: float = 2.0,
     min_view_count: int = 0,
-    top_percentile: float = 0.10,
-    bootstrap_top_n: int = 10,
-    max_clips: int = 6,
     age_decay: str = "linear",
     view_transform: str = "linear",
     title_quality_weight: float = 0.0,
     analytics_enabled: bool = False,
 ) -> list[Clip]:
-    """Score clips and return top ones based on dynamic threshold."""
+    """Score and rank all clips that pass the quality floor. Returns all passing clips sorted by score."""
     if not clips:
         return []
 
@@ -103,17 +100,5 @@ def filter_and_rank(
                 c.score *= multiplier
 
     ranked = sorted(clips, key=lambda c: c.score, reverse=True)
-
-    stats = get_streamer_stats(conn, streamer)
-
-    if stats and stats["clip_count_30d"] > 0:
-        # Dynamic threshold: clips already sorted descending by score
-        score_threshold = ranked[max(int(len(ranked) * top_percentile) - 1, 0)].score
-        result = [c for c in ranked if c.score >= score_threshold]
-    else:
-        # Bootstrap: just take top N
-        result = ranked[:bootstrap_top_n]
-
-    result = result[:max_clips]
-    log.info("Filtered to %d clips for %s (from %d)", len(result), streamer, len(ranked))
-    return result
+    log.info("Ranked %d clips for %s (from %d fetched)", len(ranked), streamer, len(ranked))
+    return ranked

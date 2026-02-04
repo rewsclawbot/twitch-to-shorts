@@ -45,8 +45,6 @@ pipeline:
   max_clips_per_streamer: 6
   max_clip_duration_seconds: 60
   velocity_weight: 2.0
-  top_percentile: 0.10
-  bootstrap_top_n: 10
   clip_lookback_hours: 168  # 7 days
   # Scoring options (optional)
   min_view_count: 300

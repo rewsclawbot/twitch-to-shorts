@@ -52,7 +52,7 @@
 | 2.2 | Title optimization | Twitch clip titles are often garbage. Test a template like "[Streamer] [action] in [game]" or let the clip title through — A/B compare manually | Tiny — string formatting |
 | 2.3 | Fail-count guard | Stop wasting upload slots retrying broken clips forever. `fail_count < 3` in dedup query | 1 line |
 | 2.4 | Basic YouTube data pull | Don't need the full analytics API yet. Just pull view count per video after 48hrs, store in DB. Tells you which clips perform | Small — 1 API call per video, new DB column |
-| 2.5 | Scoring tuning | Use 2.4 data to manually adjust `velocity_weight`, `top_percentile`. Not ML — just look at what worked and tweak | Config changes informed by data |
+| 2.5 | Scoring tuning | Use 2.4 data to manually adjust `velocity_weight`, `min_view_count`. Not ML — just look at what worked and tweak | Config changes informed by data |
 
 **Decision gate after 2.5 (expect ~4-6 weeks in Phase 2):**
 - **Channel growing, some Shorts hitting 5K-10K+ views** → Algorithm is learning. Move to Phase 3.

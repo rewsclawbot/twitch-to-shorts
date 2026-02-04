@@ -42,8 +42,6 @@ class PipelineConfig:
     max_clips_per_streamer: int = 6
     max_clip_duration_seconds: int = 60
     velocity_weight: float = 2.0
-    top_percentile: float = 0.10
-    bootstrap_top_n: int = 10
     clip_lookback_hours: int = 168
     min_view_count: int = 0
     age_decay: str = "linear"
