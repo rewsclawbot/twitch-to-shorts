@@ -1,10 +1,11 @@
 # Twitch-to-Shorts: Monetization Roadmap
 
-> Grounded in reality. Written 2026-02-02.
+> Grounded in reality. Written 2026-02-02. Updated 2026-02-04.
 >
-> **Current state:** Pre-revenue. 2 subscribers. 0 successful production uploads.
-> 76 views on broken test clips before channel got upload-restricted.
-> Pipeline works end-to-end. $100/mo spend on Claude Max. No streamer permissions.
+> **Current state:** Pre-revenue. Pipeline uploading to YouTube successfully.
+> 6 production Shorts live, 158 total channel views (includes old test clips).
+> Channel restriction lifted. Cron running, stabilizing. $100/mo spend on Claude Max.
+> No streamer permissions. Streamer: TheBurntPeanut.
 
 ---
 
@@ -14,12 +15,21 @@
 **Timeline gate:** Do NOT move to Phase 2 until you have 2 weeks of data.
 **Eng work:** Near zero. The pipeline is built.
 
-| # | Milestone | How you know it's done | Eng lift |
-|---|-----------|----------------------|----------|
-| 1.1 | Channel restriction lifts | Can upload 1 video without error | None — wait |
-| 1.2 | First clean production upload | 1 properly formatted Short is live and public | Run pipeline manually or wait for cron |
-| 1.3 | Ramp to 1-2 uploads/day | Pipeline runs on schedule, no failures for 3 consecutive days | Config tweak: `max_uploads_per_window: 1` is already correct for 4hr cron. Just let it run |
-| 1.4 | 2-week data checkpoint | You can answer: avg views/Short, avg watch time, CTR, sub growth trend | Manual check in YouTube Studio |
+| # | Milestone | How you know it's done | Eng lift | Status |
+|---|-----------|----------------------|----------|--------|
+| 1.1 | Channel restriction lifts | Can upload 1 video without error | None — wait | DONE |
+| 1.2 | First clean production upload | 1 properly formatted Short is live and public | Run pipeline manually or wait for cron | DONE — 6 Shorts live |
+| 1.3 | Ramp to 1-2 uploads/day | Pipeline runs on schedule, no failures for 3 consecutive days | Config tweak: `max_uploads_per_window: 1` is already correct for 4hr cron. Just let it run | IN PROGRESS — cron running, was flaky, stabilizing |
+| 1.4 | 2-week data checkpoint | You can answer: avg views/Short, avg watch time, CTR, sub growth trend | Manual check in YouTube Studio | PENDING — target ~2026-02-16 |
+
+**Early data snapshot (2026-02-04, 6 Shorts, <3 days of data — too early to draw conclusions):**
+
+| Short | Length | Avg View Duration | Retention | Views |
+|-------|--------|------------------|-----------|-------|
+| Beth Oven | 1:01 | 0:38 | 65.6% | 64 |
+| When You Flex on the Nut | 0:18 | 0:17 | 50.0% | 11 |
+| PEANUT FLYS AWAY! | 0:52 | 1:12 | 40.0% | 4 |
+| money | 0:31 | 0:07 | 100% | 2 |
 
 **Decision gate after 1.4:**
 - **Shorts averaging 500+ views** → Content works. Move to Phase 2.
