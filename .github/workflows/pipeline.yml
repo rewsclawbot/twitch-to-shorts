@@ -79,3 +79,12 @@ jobs:
         with:
           path: data/clips.db
           key: clips-db-v1
+
+      - name: Upload database artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clips-db
+          path: data/clips.db
+          retention-days: 7
+          overwrite: true

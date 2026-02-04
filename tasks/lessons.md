@@ -90,6 +90,11 @@
 - `ctypes` defaults to `c_int` (32-bit) return type for all foreign functions. On 64-bit Windows, `HANDLE` is a pointer (64-bit). `OpenProcess` returns a handle that could be truncated to 32 bits, causing silent corruption.
 - **Rule**: Always set `.restype` and `.argtypes` on ctypes foreign function calls. Never rely on the default `c_int` return type.
 
+### ALWAYS sync CI database before running pipeline locally
+- Ran `python main.py` locally without downloading the CI database cache first. CI had already uploaded "You Can't Just Say That" but the local DB didn't know about it → duplicate upload to YouTube.
+- The CI and local databases are completely separate (`data/clips.db` is gitignored, CI caches its own copy).
+- **Rule**: Before ANY local pipeline run (dry or real), download the CI database to `data/clips.db`. Never assume the local DB is in sync with CI. Build a `sync-db.sh` script to make this frictionless.
+
 ### Non-quota 403s should skip, not halt — but add a circuit breaker
 - YouTube 403s can be clip-specific (content policy) or channel-level (suspension/strike). Halting the entire pipeline on any 403 is too conservative (wastes remaining quota). Skipping without limit is too aggressive (burns quota on doomed retries if the channel is banned).
 - **Rule**: Skip on 403 but track consecutive failures. After 3 in a row, assume the issue is channel-level and stop uploading for that streamer.
