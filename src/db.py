@@ -70,9 +70,19 @@ def init_schema(conn: sqlite3.Connection):
 
 def clip_overlaps(conn: sqlite3.Connection, streamer: str, created_at: str, window_seconds: int = 30, exclude_clip_id: str | None = None) -> bool:
     """Check if a clip from the same streamer exists within window_seconds of created_at."""
+    # Coarse pre-filter using ISO string comparison to narrow the scan,
+    # then precise julianday() check on the reduced set.
+    try:
+        dt = datetime.fromisoformat(created_at)
+        lower = (dt - timedelta(seconds=window_seconds)).isoformat()
+        upper = (dt + timedelta(seconds=window_seconds)).isoformat()
+    except (ValueError, TypeError):
+        lower = ""
+        upper = "9999-12-31T23:59:59"
     query = """SELECT 1 FROM clips WHERE streamer = ?
+           AND created_at >= ? AND created_at <= ?
            AND ABS(julianday(created_at) - julianday(?)) * 86400 < ?"""
-    params: list = [streamer, created_at, window_seconds]
+    params: list = [streamer, lower, upper, created_at, window_seconds]
     if exclude_clip_id:
         query += " AND clip_id != ?"
         params.append(exclude_clip_id)
@@ -127,7 +137,7 @@ def record_known_clip(conn: sqlite3.Connection, clip: Clip):
         """INSERT INTO clips (clip_id, streamer, channel_key, title, view_count, created_at, youtube_id)
            VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(clip_id) DO UPDATE SET
-               youtube_id = excluded.youtube_id,
+               youtube_id = COALESCE(clips.youtube_id, excluded.youtube_id),
                view_count = excluded.view_count,
                title = excluded.title,
                channel_key = excluded.channel_key""",

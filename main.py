@@ -96,10 +96,9 @@ def validate_config(streamers: list[StreamerConfig], raw_config: dict, dry_run: 
     if not dry_run and not youtube.get("client_secrets_file"):
         errors.append("Missing youtube.client_secrets_file in config.yaml")
 
-    twitch = raw_config.get("twitch") or {}
-    if not (os.environ.get("TWITCH_CLIENT_ID") or twitch.get("client_id")):
+    if not os.environ.get("TWITCH_CLIENT_ID"):
         errors.append("Missing Twitch client ID (set TWITCH_CLIENT_ID)")
-    if not (os.environ.get("TWITCH_CLIENT_SECRET") or twitch.get("client_secret")):
+    if not os.environ.get("TWITCH_CLIENT_SECRET"):
         errors.append("Missing Twitch client secret (set TWITCH_CLIENT_SECRET)")
 
     if errors:
@@ -227,11 +226,17 @@ def acquire_lock() -> bool:
             return False  # Process is alive
     except (ValueError, OSError) as e:
         log.warning("Removed stale/corrupt lock file: %s", e)
+    # Atomic replace: write new PID to temp file, then os.replace() over the lock.
+    # This avoids the TOCTOU race of remove-then-create.
+    tmp_lock = LOCK_FILE + ".tmp"
     try:
-        os.remove(LOCK_FILE)
+        fd = os.open(tmp_lock, os.O_CREAT | os.O_TRUNC | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        os.replace(tmp_lock, LOCK_FILE)
+        return True
     except OSError:
         return False
-    return _try_create_lock()
 
 
 def release_lock():
@@ -255,16 +260,268 @@ def run_pipeline(pipeline: PipelineConfig, streamers: list[StreamerConfig], raw_
         conn.close()
 
 
+def _process_single_clip(clip, yt_service, conn, cfg, streamer, log, dry_run,
+                         title_template, title_templates, description_template,
+                         description_templates, extra_tags_global,
+                         thumbnail_enabled, thumbnail_samples, thumbnail_width):
+    """Process a single clip: download, crop, upload, verify, thumbnail.
+
+    Returns a tuple of (result, youtube_id) where result is one of:
+        "downloaded_fail" - download failed
+        "processed_fail"  - video processing failed
+        "dry_run"         - dry run, no upload
+        "duplicate"       - already on channel
+        "quota_exhausted" - YouTube quota hit
+        "forbidden"       - 403 from YouTube
+        "upload_fail"     - upload returned no ID
+        "uploaded"        - successful upload
+    """
+    video_path = download_clip(clip, cfg.tmp_dir)
+    if not video_path:
+        increment_fail_count(conn, clip)
+        return "downloaded_fail", None
+
+    vertical_path = crop_to_vertical(
+        video_path, cfg.tmp_dir, cfg.max_clip_duration_seconds,
+        facecam=streamer.facecam,
+        facecam_mode=streamer.facecam_mode,
+    )
+    thumbnail_path = None
+    if not vertical_path:
+        increment_fail_count(conn, clip)
+        _cleanup_tmp_files(video_path)
+        return "processed_fail", None
+
+    if dry_run:
+        log.info("[DRY RUN] Would upload clip %s: %s", clip.id, clip.title)
+        _cleanup_tmp_files(video_path, vertical_path)
+        return "dry_run", None
+
+    # Defense-in-depth: check YouTube channel for existing upload with same title
+    planned_title = build_upload_title(clip, title_template, title_templates)
+    existing_yt_id = check_channel_for_duplicate(yt_service, planned_title)
+    if existing_yt_id:
+        log.warning("Clip %s already on channel as %s — recording and skipping", clip.id, existing_yt_id)
+        clip.youtube_id = existing_yt_id
+        record_known_clip(conn, clip)
+        _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
+        return "duplicate", None
+
+    try:
+        youtube_id = upload_short(yt_service, vertical_path, clip,
+                                  category_id=streamer.category_id,
+                                  privacy_status=streamer.privacy_status,
+                                  title_template=title_template,
+                                  title_templates=title_templates,
+                                  description_template=description_template,
+                                  description_templates=description_templates,
+                                  extra_tags=(extra_tags_global or []) + (streamer.extra_tags or []))
+    except QuotaExhaustedError:
+        log.warning("YouTube quota exhausted — stopping uploads for this run")
+        _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
+        return "quota_exhausted", None
+    except ForbiddenError:
+        increment_fail_count(conn, clip)
+        _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
+        return "forbidden", None
+
+    if not youtube_id:
+        increment_fail_count(conn, clip)
+        _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
+        return "upload_fail", None
+
+    # Record to DB immediately after upload succeeds — before verify/thumbnail.
+    # A phantom DB entry is trivially cleanable; a duplicate upload is not.
+    clip.youtube_id = youtube_id
+    insert_clip(conn, clip)
+    log.info("Uploaded clip %s -> YouTube %s", clip.id, youtube_id)
+
+    if not verify_upload(yt_service, youtube_id):
+        log.warning("Upload verification failed for clip %s (yt=%s) — already recorded in DB", clip.id, youtube_id)
+
+    if thumbnail_enabled:
+        thumbnail_path = extract_thumbnail(
+            vertical_path,
+            cfg.tmp_dir,
+            samples=thumbnail_samples,
+            width=thumbnail_width,
+        )
+        if thumbnail_path:
+            set_thumbnail(yt_service, youtube_id, thumbnail_path)
+
+    _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
+    return "uploaded", youtube_id
+
+
+def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
+                      client_secrets_file, title_template, title_templates,
+                      description_template, description_templates,
+                      extra_tags_global, thumbnail_enabled, thumbnail_samples,
+                      thumbnail_width):
+    """Process all clips for a single streamer.
+
+    Returns a tuple of (fetched, filtered, downloaded, processed, uploaded, failed, quota_exhausted).
+    """
+    name = streamer.name
+    twitch_id = streamer.twitch_id
+    channel_key = streamer.youtube_credentials or name
+    log.info("=== Processing streamer: %s ===", name)
+
+    fetched = filtered = downloaded = processed = uploaded = failed = 0
+
+    try:
+        clips = twitch.fetch_clips(twitch_id, cfg.clip_lookback_hours)
+    except Exception:
+        log.exception("Failed to fetch clips for %s", name)
+        return fetched, filtered, downloaded, processed, uploaded, failed, False
+
+    if not clips:
+        log.info("No clips found for %s", name)
+        return fetched, filtered, downloaded, processed, uploaded, failed, False
+
+    fetched = len(clips)
+
+    for c in clips:
+        c.streamer = name
+        c.channel_key = channel_key
+
+    ranked = filter_and_rank(
+        conn, clips, name,
+        velocity_weight=cfg.velocity_weight,
+        min_view_count=cfg.min_view_count,
+        age_decay=cfg.age_decay,
+        view_transform=cfg.view_transform,
+        title_quality_weight=cfg.title_quality_weight,
+        analytics_enabled=cfg.analytics_enabled,
+    )
+
+    new_clips = filter_new_clips(conn, ranked)
+    max_duration = cfg.max_clip_duration_seconds
+    if new_clips:
+        too_long = [c for c in new_clips if c.duration > max_duration]
+        if too_long:
+            log.info("Skipping %d clips over %ds before max_clips_per_streamer cap", len(too_long), max_duration)
+        new_clips = [c for c in new_clips if c.duration <= max_duration]
+    new_clips = new_clips[:cfg.max_clips_per_streamer]
+    filtered = len(new_clips)
+    log.info("%d new clips after dedup (from %d ranked)", len(new_clips), len(ranked))
+
+    if not new_clips:
+        return fetched, filtered, downloaded, processed, uploaded, failed, False
+
+    game_ids = [c.game_id for c in new_clips]
+    try:
+        game_names = twitch.get_game_names(game_ids)
+    except Exception:
+        log.warning("Failed to resolve game names, continuing without")
+        game_names = {}
+    for c in new_clips:
+        c.game_name = game_names.get(c.game_id, "")
+
+    # Upload scheduling: max 1 upload per streamer per 2 hours
+    recent = recent_upload_count(conn, name, cfg.upload_spacing_hours, channel_key=channel_key)
+    uploads_remaining = max(cfg.max_uploads_per_window - recent, 0)
+    if uploads_remaining == 0:
+        log.info("Skipping uploads for %s: %d uploaded in last %dh", name, recent, cfg.upload_spacing_hours)
+        return fetched, filtered, downloaded, processed, uploaded, failed, False
+
+    yt_service = None
+    if not dry_run:
+        try:
+            yt_service = get_authenticated_service(
+                client_secrets_file,
+                streamer.youtube_credentials,
+            )
+        except Exception:
+            log.exception("Failed to authenticate YouTube for %s", name)
+            return fetched, filtered, downloaded, processed, uploaded, failed, False
+
+    quota_exhausted = False
+    consecutive_403s = 0
+    for clip in new_clips:
+        if uploads_remaining <= 0:
+            break
+
+        result, _ = _process_single_clip(
+            clip, yt_service, conn, cfg, streamer, log, dry_run,
+            title_template, title_templates, description_template,
+            description_templates, extra_tags_global,
+            thumbnail_enabled, thumbnail_samples, thumbnail_width,
+        )
+
+        if result == "downloaded_fail":
+            # Download failed — nothing was downloaded or processed
+            failed += 1
+        elif result == "processed_fail":
+            # Downloaded but crop/processing failed
+            downloaded += 1
+            failed += 1
+        elif result == "dry_run":
+            downloaded += 1
+            processed += 1
+            uploaded += 1
+        elif result == "duplicate":
+            downloaded += 1
+            processed += 1
+        elif result == "quota_exhausted":
+            downloaded += 1
+            processed += 1
+            quota_exhausted = True
+            break
+        elif result == "forbidden":
+            downloaded += 1
+            processed += 1
+            failed += 1
+            consecutive_403s += 1
+            if consecutive_403s >= 3:
+                log.warning("3 consecutive upload failures for %s — skipping remaining clips", name)
+                break
+        elif result == "upload_fail":
+            downloaded += 1
+            processed += 1
+            failed += 1
+            consecutive_403s = 0
+        elif result == "uploaded":
+            downloaded += 1
+            processed += 1
+            uploaded += 1
+            uploads_remaining -= 1
+            consecutive_403s = 0
+
+    update_streamer_stats(conn, name)
+
+    if cfg.analytics_enabled and not dry_run:
+        try:
+            synced = _sync_streamer_metrics(
+                conn,
+                name,
+                client_secrets_file,
+                streamer.youtube_credentials,
+                cfg.analytics_min_age_hours,
+                cfg.analytics_sync_interval_hours,
+                cfg.analytics_max_videos_per_run,
+            )
+            if synced:
+                log.info("Synced analytics for %d videos for %s", synced, name)
+        except Exception:
+            log.exception("Analytics sync failed for %s", name)
+
+    return fetched, filtered, downloaded, processed, uploaded, failed, quota_exhausted
+
+
 def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], raw_config: dict, conn, log, dry_run: bool = False):
 
-    twitch_client_id = os.environ.get("TWITCH_CLIENT_ID") or (raw_config.get("twitch") or {}).get("client_id")
-    twitch_client_secret = os.environ.get("TWITCH_CLIENT_SECRET") or (raw_config.get("twitch") or {}).get("client_secret")
+    twitch_client_id = os.environ.get("TWITCH_CLIENT_ID")
+    twitch_client_secret = os.environ.get("TWITCH_CLIENT_SECRET")
     if not twitch_client_id or not twitch_client_secret:
         log.error("TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET environment variables must be set")
         raise ValueError("TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET must be set")
 
     twitch = TwitchClient(twitch_client_id, twitch_client_secret)
     youtube_cfg = raw_config.get("youtube") or {}
+    client_secrets_file = youtube_cfg.get("client_secrets_file")
+    if not dry_run and not client_secrets_file:
+        raise ValueError("Missing youtube.client_secrets_file in config.yaml")
     title_template = youtube_cfg.get("title_template")
     title_templates = youtube_cfg.get("title_templates")
     description_template = youtube_cfg.get("description_template")
@@ -289,192 +546,19 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
     total_failed = 0
 
     for streamer in streamers:
-        name = streamer.name
-        twitch_id = streamer.twitch_id
-        channel_key = streamer.youtube_credentials or name
-        log.info("=== Processing streamer: %s ===", name)
-
-        try:
-            clips = twitch.fetch_clips(twitch_id, cfg.clip_lookback_hours)
-        except Exception:
-            log.exception("Failed to fetch clips for %s", name)
-            continue
-
-        if not clips:
-            log.info("No clips found for %s", name)
-            continue
-
-        total_fetched += len(clips)
-
-        for c in clips:
-            c.streamer = name
-            c.channel_key = channel_key
-
-        ranked = filter_and_rank(
-            conn, clips, name,
-            velocity_weight=cfg.velocity_weight,
-            min_view_count=cfg.min_view_count,
-            age_decay=cfg.age_decay,
-            view_transform=cfg.view_transform,
-            title_quality_weight=cfg.title_quality_weight,
-            analytics_enabled=cfg.analytics_enabled,
+        fetched, filtered, downloaded, processed, uploaded, failed, quota_exhausted = _process_streamer(
+            streamer, twitch, cfg, conn, log, dry_run,
+            client_secrets_file, title_template, title_templates,
+            description_template, description_templates,
+            extra_tags_global, thumbnail_enabled, thumbnail_samples,
+            thumbnail_width,
         )
-
-        new_clips = filter_new_clips(conn, ranked)
-        max_duration = cfg.max_clip_duration_seconds
-        if new_clips:
-            too_long = [c for c in new_clips if c.duration > max_duration]
-            if too_long:
-                log.info("Skipping %d clips over %ds before max_clips_per_streamer cap", len(too_long), max_duration)
-            new_clips = [c for c in new_clips if c.duration <= max_duration]
-        new_clips = new_clips[:cfg.max_clips_per_streamer]
-        total_filtered += len(new_clips)
-        log.info("%d new clips after dedup (from %d ranked)", len(new_clips), len(ranked))
-
-        if not new_clips:
-            continue
-
-        game_ids = [c.game_id for c in new_clips]
-        try:
-            game_names = twitch.get_game_names(game_ids)
-        except Exception:
-            log.warning("Failed to resolve game names, continuing without")
-            game_names = {}
-        for c in new_clips:
-            c.game_name = game_names.get(c.game_id, "")
-
-        # Upload scheduling: max 1 upload per streamer per 2 hours
-        recent = recent_upload_count(conn, name, cfg.upload_spacing_hours, channel_key=channel_key)
-        uploads_remaining = max(cfg.max_uploads_per_window - recent, 0)
-        if uploads_remaining == 0:
-            log.info("Skipping uploads for %s: %d uploaded in last %dh", name, recent, cfg.upload_spacing_hours)
-            continue
-
-        yt_service = None
-        if not dry_run:
-            try:
-                yt_service = get_authenticated_service(
-                    youtube_cfg["client_secrets_file"],
-                    streamer.youtube_credentials,
-                )
-            except Exception:
-                log.exception("Failed to authenticate YouTube for %s", name)
-                continue
-
-        quota_exhausted = False
-        consecutive_403s = 0
-        for clip in new_clips:
-            if uploads_remaining <= 0:
-                break
-
-            video_path = download_clip(clip, cfg.tmp_dir)
-            if not video_path:
-                increment_fail_count(conn, clip)
-                total_failed += 1
-                continue
-            total_downloaded += 1
-
-            vertical_path = crop_to_vertical(
-                video_path, cfg.tmp_dir, cfg.max_clip_duration_seconds,
-                facecam=streamer.facecam,
-                facecam_mode=streamer.facecam_mode,
-            )
-            thumbnail_path = None
-            if not vertical_path:
-                increment_fail_count(conn, clip)
-                total_failed += 1
-                _cleanup_tmp_files(video_path)
-                continue
-            total_processed += 1
-
-            if dry_run:
-                log.info("[DRY RUN] Would upload clip %s: %s", clip.id, clip.title)
-                total_uploaded += 1
-                continue
-
-            # Defense-in-depth: check YouTube channel for existing upload with same title
-            planned_title = build_upload_title(clip, title_template, title_templates)
-            existing_yt_id = check_channel_for_duplicate(yt_service, planned_title)
-            if existing_yt_id:
-                log.warning("Clip %s already on channel as %s — recording and skipping", clip.id, existing_yt_id)
-                clip.youtube_id = existing_yt_id
-                record_known_clip(conn, clip)
-                _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
-                continue
-
-            try:
-                youtube_id = upload_short(yt_service, vertical_path, clip,
-                                         category_id=streamer.category_id,
-                                         privacy_status=streamer.privacy_status,
-                                         title_template=title_template,
-                                         title_templates=title_templates,
-                                         description_template=description_template,
-                                         description_templates=description_templates,
-                                         extra_tags=(extra_tags_global or []) + (streamer.extra_tags or []))
-            except QuotaExhaustedError:
-                log.warning("YouTube quota exhausted — stopping uploads for this run")
-                _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
-                quota_exhausted = True
-                break
-            except ForbiddenError:
-                increment_fail_count(conn, clip)
-                total_failed += 1
-                consecutive_403s += 1
-                _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
-                if consecutive_403s >= 3:
-                    log.warning("3 consecutive upload failures for %s — skipping remaining clips", name)
-                    break
-                continue
-
-            if not youtube_id:
-                increment_fail_count(conn, clip)
-                total_failed += 1
-                consecutive_403s = 0
-                _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
-                continue
-
-            # Record to DB immediately after upload succeeds — before verify/thumbnail.
-            # A phantom DB entry is trivially cleanable; a duplicate upload is not.
-            consecutive_403s = 0
-            clip.youtube_id = youtube_id
-            insert_clip(conn, clip)
-            total_uploaded += 1
-            uploads_remaining -= 1
-            log.info("Uploaded clip %s -> YouTube %s", clip.id, youtube_id)
-
-            if not verify_upload(yt_service, youtube_id):
-                log.warning("Upload verification failed for clip %s (yt=%s) — already recorded in DB", clip.id, youtube_id)
-
-            if thumbnail_enabled:
-                thumbnail_path = extract_thumbnail(
-                    vertical_path,
-                    cfg.tmp_dir,
-                    samples=thumbnail_samples,
-                    width=thumbnail_width,
-                )
-                if thumbnail_path:
-                    set_thumbnail(yt_service, youtube_id, thumbnail_path)
-
-            _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
-
-        update_streamer_stats(conn, name)
-
-        if cfg.analytics_enabled and not dry_run:
-            try:
-                synced = _sync_streamer_metrics(
-                    conn,
-                    name,
-                    youtube_cfg["client_secrets_file"],
-                    streamer.youtube_credentials,
-                    cfg.analytics_min_age_hours,
-                    cfg.analytics_sync_interval_hours,
-                    cfg.analytics_max_videos_per_run,
-                )
-                if synced:
-                    log.info("Synced analytics for %d videos for %s", synced, name)
-            except Exception:
-                log.exception("Analytics sync failed for %s", name)
-
+        total_fetched += fetched
+        total_filtered += filtered
+        total_downloaded += downloaded
+        total_processed += processed
+        total_uploaded += uploaded
+        total_failed += failed
         if quota_exhausted:
             break
 

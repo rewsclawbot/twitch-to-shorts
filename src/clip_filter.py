@@ -36,11 +36,7 @@ def _transform_views(views: int, view_transform: str) -> float:
     return float(views)
 
 
-def compute_score(clip: Clip, velocity_weight: float = 2.0) -> float:
-    return compute_score_with_options(clip, velocity_weight=velocity_weight)
-
-
-def compute_score_with_options(
+def compute_score(
     clip: Clip,
     velocity_weight: float = 2.0,
     age_decay: str = "linear",
@@ -84,7 +80,7 @@ def filter_and_rank(
             return []
 
     for c in clips:
-        c.score = compute_score_with_options(
+        c.score = compute_score(
             c,
             velocity_weight=velocity_weight,
             age_decay=age_decay,

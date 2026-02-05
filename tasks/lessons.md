@@ -161,3 +161,25 @@
 ### Spacing thresholds must account for execution delay variance
 - `upload_spacing_hours: 4` matched the cron interval (every 4h), leaving zero tolerance for GitHub Actions delay variance. Delays range 58m–2h36m, so the worst-case wall-clock gap between consecutive slots is `4h - (max_delay - min_delay)` = ~2h22m. A 4h spacing check on actual upload times (`posted_at`) blocked valid cron slots whenever `slot_B_delay < slot_A_delay`.
 - **Rule**: `upload_spacing_hours` must be strictly less than `cron_interval - max_delay_variance`. With 4h cron and ~1h38m observed variance, 2h gives safe margin. The cron schedule + `max_uploads_per_window` are the primary rate limiters — spacing is just a safety net against rapid-fire manual runs.
+
+## 2026-02-05 — Audit Fix Sprint (28 Findings)
+
+### `format_map()` does NOT re-interpret substituted values
+- youtube-fixes added `_escape_braces()` to replace `{` with `{{` in user-supplied clip titles before passing to `format_map()`. But `format_map` only interprets braces in the **template string**, not in substituted values. Values are inserted literally. The escaping doubled every brace in output: `{malicious_key}` became `{{malicious_key}}`.
+- **Rule**: `str.format_map()` substituted values are literal — they are never re-parsed for format specifiers. Don't escape braces in values. Only the template string needs `{{`/`}}` for literal braces.
+
+### Idle teammates burn tokens — tell them to stop polling
+- test-and-ci was blocked waiting for code teams to finish. Without explicit instruction to stop, it polled TaskList every ~3 seconds, generating dozens of idle notifications and wasting API tokens.
+- **Rule**: When a teammate's tasks are all blocked, immediately message them: "Stop. I'll ping you when blockers clear." Don't wait for them to figure it out.
+
+### Respawn completed agents for bug fixes instead of fixing code yourself
+- youtube-fixes was shut down when we discovered the `_escape_braces` bug in their code. Rather than fixing it directly (breaking delegate mode), we respawned youtube-fixes with a single focused task. Clean separation of concerns maintained.
+- **Rule**: In delegate mode, if a completed teammate's code has a bug, respawn them with a focused fix task rather than breaking the delegation pattern.
+
+### COALESCE preserves existing data — update tests to match
+- core-fixes changed `record_known_clip` to use `COALESCE(clips.youtube_id, excluded.youtube_id)`, correctly preserving legitimate YouTube IDs. But the existing test expected the old overwrite behavior. The fix was correct; the test assertion was wrong.
+- **Rule**: When changing upsert semantics from "overwrite" to "preserve existing," audit every test that asserts on the overwritten value. The test expectations flip.
+
+### Consolidated ffmpeg probes save 4 subprocess spawns per clip
+- video_processor had 6 separate subprocess calls per clip: `_get_duration()`, `_get_dimensions()`, and 3x `_has_facecam()` at 25%/50%/75%. Consolidated to 2: one `ffprobe -show_format -show_streams -print_format json` for duration+dimensions, one multi-input ffmpeg for all 3 facecam checks.
+- **Rule**: Before adding subprocess calls, audit whether existing calls already return the needed data. `ffprobe -show_format -show_streams` returns both duration and dimensions in one call.

@@ -1,6 +1,6 @@
 twitch:
-  # Set TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET environment variables
-  # client_id and client_secret are read from env vars, not from this file
+  # WARNING: Do NOT put client_id or client_secret here — this file is committed to git.
+  # Set TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET as environment variables only.
 
 youtube:
   # Path to OAuth client secrets JSON downloaded from Google Cloud Console

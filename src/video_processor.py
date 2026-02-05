@@ -2,15 +2,12 @@ import json
 import logging
 import os
 import re
-import shutil
 import subprocess
 
+from src.media_utils import FFMPEG, FFPROBE
 from src.models import FacecamConfig
 
 log = logging.getLogger(__name__)
-
-FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
-FFPROBE = shutil.which("ffprobe") or "ffprobe"
 
 
 def _remove_file(path: str):
@@ -20,34 +17,46 @@ def _remove_file(path: str):
         pass
 
 
-def _get_duration(path: str) -> float | None:
+def _probe_video_info(path: str) -> tuple[float | None, tuple[int, int] | None]:
+    """Probe duration and dimensions in a single ffprobe call.
+
+    Returns (duration, (width, height)). Either may be None on failure.
+    """
     try:
         result = subprocess.run(
-            [FFPROBE, "-v", "quiet", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", path],
-            capture_output=True, text=True, timeout=15,
-        )
-        return float(result.stdout.strip())
-    except Exception as e:
-        log.warning("Failed to get duration for %s: %s", path, e)
-        return None
-
-
-def _get_dimensions(path: str) -> tuple[int, int] | None:
-    """Probe source video dimensions (width, height)."""
-    try:
-        result = subprocess.run(
-            [FFPROBE, "-v", "quiet", "-select_streams", "v:0",
-             "-show_entries", "stream=width,height",
-             "-of", "json", path],
+            [FFPROBE, "-v", "quiet", "-print_format", "json",
+             "-show_format", "-show_streams", "-select_streams", "v:0", path],
             capture_output=True, text=True, timeout=15,
         )
         info = json.loads(result.stdout)
-        stream = info["streams"][0]
-        return int(stream["width"]), int(stream["height"])
     except Exception as e:
-        log.warning("Failed to get dimensions for %s: %s", path, e)
-        return None
+        log.warning("Failed to probe video info for %s: %s", path, e)
+        return None, None
+
+    duration = None
+    dims = None
+
+    # Duration: prefer format.duration, fall back to stream.duration
+    try:
+        duration = float(info.get("format", {}).get("duration", 0))
+        if not duration:
+            duration = float(info["streams"][0].get("duration", 0)) or None
+    except (ValueError, TypeError, KeyError, IndexError):
+        pass
+
+    try:
+        stream = info["streams"][0]
+        dims = (int(stream["width"]), int(stream["height"]))
+    except (KeyError, IndexError, ValueError, TypeError):
+        pass
+
+    return duration, dims
+
+
+def _get_duration(path: str) -> float | None:
+    """Get video duration. Used by extract_thumbnail which doesn't need dimensions."""
+    duration, _ = _probe_video_info(path)
+    return duration
 
 
 def _sample_ydif(input_path: str, timestamp: float) -> float:
@@ -157,7 +166,9 @@ def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
         log.info("Vertical clip already exists: %s", output_path)
         return output_path
 
-    duration = _get_duration(input_path)
+    # Single probe for both duration and dimensions
+    duration, dims = _probe_video_info(input_path)
+
     # Allow slight overage (60.5s) since YouTube Shorts limit is ~60s
     if duration is not None and duration > max_duration + 0.5:
         log.info("Skipping clip %s: duration %.1fs exceeds %ds limit", clip_id, duration, max_duration)
@@ -179,8 +190,6 @@ def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
     else:
         use_facecam = _has_facecam(input_path, facecam, clip_id, duration=duration)
 
-    # Probe source dimensions for non-16:9 handling
-    dims = _get_dimensions(input_path)
     if dims is None:
         log.warning("Could not probe dimensions for %s, assuming 16:9", clip_id)
     source_ratio = (dims[0] / dims[1]) if dims else (16 / 9)
@@ -214,41 +223,46 @@ def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
 def _has_facecam(input_path: str, facecam: FacecamConfig, clip_id: str, duration: float | None = None) -> bool:
     """Check if the facecam region contains an actual camera feed vs static UI.
 
-    Samples frames at 25% of duration and measures pixel variance in the expected
-    facecam region. Low variance = static UI element, not a real facecam.
+    Uses a single ffmpeg invocation with 3 input seeks (25%, 50%, 75% of duration)
+    to measure pixel variance in the facecam region. Low variance = static UI.
     """
     fx = facecam.x
     fy = facecam.y
     fw = facecam.w
     fh = facecam.h
 
-    # Multi-point sampling: 25%, 50%, 75% of duration for robust detection
     if duration is None:
         duration = _get_duration(input_path)
 
-    crop_filter = f"crop=iw*{fw}:ih*{fh}:iw*{fx}:ih*{fy},signalstats,metadata=print"
-    ydif_values = []
-
+    # Build a single ffmpeg command with 3 seeks into the same file
+    seek_times = []
     for pct in [0.25, 0.50, 0.75]:
-        seek_time = str(max(1, int(duration * pct))) if duration else "1"
-        cmd = [
-            FFMPEG, "-ss", seek_time, "-i", input_path,
-            "-vf", crop_filter,
-            "-frames:v", "5",
-            "-f", "null", "-",
-        ]
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-            for line in result.stderr.splitlines():
-                if "signalstats.YDIF=" in line:
-                    try:
-                        ydif_values.append(float(line.split("YDIF=")[1]))
-                    except (ValueError, IndexError):
-                        pass
-        except subprocess.TimeoutExpired:
-            log.warning("Facecam detection timed out at %.0f%% for %s", pct * 100, clip_id)
-        except Exception as e:
-            log.warning("Facecam detection failed at %.0f%% for %s: %s", pct * 100, clip_id, e)
+        seek_times.append(str(max(1, int(duration * pct))) if duration else "1")
+
+    crop_stats = f"crop=iw*{fw}:ih*{fh}:iw*{fx}:ih*{fy},signalstats,metadata=print"
+    cmd = [FFMPEG]
+    for st in seek_times:
+        cmd += ["-ss", st, "-i", input_path]
+    # Build filter_complex: each input gets 5 frames through crop+signalstats
+    filters = []
+    for i in range(len(seek_times)):
+        filters.append(f"[{i}:v]{crop_stats},trim=end_frame=5[v{i}]")
+    filters.append(f"[v0][v1][v2]concat=n=3:v=1:a=0[out]")
+    cmd += ["-filter_complex", ";".join(filters), "-map", "[out]", "-f", "null", "-"]
+
+    ydif_values = []
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        for line in result.stderr.splitlines():
+            if "signalstats.YDIF=" in line:
+                try:
+                    ydif_values.append(float(line.split("YDIF=")[1]))
+                except (ValueError, IndexError):
+                    pass
+    except subprocess.TimeoutExpired:
+        log.warning("Facecam detection timed out for %s", clip_id)
+    except Exception as e:
+        log.warning("Facecam detection failed for %s: %s", clip_id, e)
 
     if ydif_values:
         avg_ydif = sum(ydif_values) / len(ydif_values)

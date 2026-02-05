@@ -1,9 +1,21 @@
+# Secrets
 credentials/
+.env
+
+# Runtime data
 data/clips.db
+data/clips.db-wal
+data/clips.db-shm
 data/tmp/
-data/pipeline.log
 data/*.log
+
+# Python
 __pycache__/
 *.pyc
-.env
+.pytest_cache/
+
+# IDE / tools
+.claude/
+
+# Windows artifacts
 NUL

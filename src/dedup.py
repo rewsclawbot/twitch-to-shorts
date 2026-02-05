@@ -5,25 +5,25 @@ from datetime import datetime
 from src.db import clip_overlaps
 from src.models import Clip
 
-BLOCKLIST_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "blocklist.txt")
+DEFAULT_BLOCKLIST_PATH = os.path.join("data", "blocklist.txt")
 log = logging.getLogger(__name__)
 
 
-def load_blocklist() -> set[str]:
+def load_blocklist(blocklist_path: str = DEFAULT_BLOCKLIST_PATH) -> set[str]:
     """Load clip IDs from blocklist file (one per line)."""
-    if not os.path.exists(BLOCKLIST_PATH):
+    if not os.path.exists(blocklist_path):
         return set()
-    with open(BLOCKLIST_PATH) as f:
+    with open(blocklist_path) as f:
         return {line.strip() for line in f if line.strip() and not line.startswith("#")}
 
 
-def filter_new_clips(conn: sqlite3.Connection, clips: list[Clip]) -> list[Clip]:
+def filter_new_clips(conn: sqlite3.Connection, clips: list[Clip], blocklist_path: str = DEFAULT_BLOCKLIST_PATH) -> list[Clip]:
     """Return only clips not already in the database, overlapping, or blacklisted."""
     if not clips:
         return []
 
     clip_ids = [c.id for c in clips]
-    blocklist = load_blocklist()
+    blocklist = load_blocklist(blocklist_path)
 
     # Batch query: existing clip IDs (include permanently failed clips)
     placeholders = ",".join("?" for _ in clip_ids)

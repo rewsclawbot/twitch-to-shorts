@@ -133,46 +133,12 @@ These aren't bad ideas. They're just Phase 4-5 ideas being discussed at Phase 1.
 
 ## Execution Plan
 
-### Wave 5A: Audit-Critical Correctness + Security
-1. Remove `from __future__ import annotations` across files.
-2. Use native `fromisoformat()` in `src/clip_filter.py`.
-3. Remove unused fields from `Clip` and `PipelineConfig`.
-4. Remove redundant startup `clean_stale_tmp` call.
-5. Simplify ffmpeg/ffprobe discovery to `shutil.which`.
-6. Use `sorted()` in `filter_and_rank` to avoid in-place mutation.
-7. Guard against malformed Twitch clip payloads (skip bad entries).
-8. Make downloads atomic (`.part` then `os.replace`).
-9. Write credential files with `0o600` permissions.
-10. Add WAL checkpoint before closing DB.
-11. Bound upload chunk retry loop.
-12. Improve Twitch retry logic for 401/429.
-13. Make loudness JSON parsing more robust.
-
-### Wave 5B: Ops + Hygiene Polish
-1. Add `.env.example`.
-2. Align default `clip_lookback_hours=168` in `PipelineConfig`.
-3. Pipe secrets in CI without shell variables.
-4. Consolidate `_run_ffmpeg` temp cleanup into helper.
-5. Normalize credential filename (`xqc_youtube.json` -> streamer-named).
-6. Remove redundant comments.
-7. Fix `run.bat` to use `python` or `py -3.12`.
-
-### Wave 6: Scoring Improvements
-1. Add configurable absolute view floor before scoring.
-2. Add optional logarithmic age decay.
-3. Add optional `log(views)` or soft-cap option.
-4. Add lightweight title-quality heuristics (toggleable).
-
-### Wave 7: YouTube Analytics Feedback Loop
-1. Integrate YouTube Analytics API for views, CTR, watch time.
-2. Add DB columns or table for per-video metrics and `last_sync`.
-3. Add scheduled metrics sync job (24-48h after upload).
-4. Use analytics to compute a performance multiplier in scoring.
-
-### Wave 8: Content Optimization
-1. Auto-generate thumbnails from high-action frames.
-2. Optional A/B testing for title templates (per streamer).
-3. Tag enrichment for improved discoverability.
+### ~~Wave 5A: Audit-Critical Correctness + Security~~ DONE (2026-02-04)
+### ~~Wave 5B: Ops + Hygiene Polish~~ DONE (2026-02-04)
+### ~~Wave 6: Scoring Improvements~~ DONE (2026-02-04)
+### ~~Wave 7: YouTube Analytics Feedback Loop~~ DONE (2026-02-04, analytics dormant until Phase 2 data)
+### ~~Wave 8: Content Optimization~~ DONE (2026-02-04)
+### ~~Audit Fix Sprint~~ DONE (2026-02-05) — 28 findings fixed, 166 tests. See `docs/audit-history.md`.
 
 ### Wave 9: Scale + Compilation Channels
 1. Multi-streamer onboarding workflow.

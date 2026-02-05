@@ -20,18 +20,28 @@ class TwitchClient:
         self.client_secret = client_secret
         self._token: str | None = None
         self._token_expires_at: float = 0.0
+        self._last_token_failure: float = 0.0
 
     def _get_token(self) -> str:
         if self._token and time.monotonic() < self._token_expires_at:
             return self._token
-        resp = requests.post(TOKEN_URL, params={
-            "client_id": self.client_id,
-            "client_secret": self.client_secret,
-            "grant_type": "client_credentials",
-        }, timeout=DEFAULT_TIMEOUT)
-        resp.raise_for_status()
+        # Backoff: wait at least 2s between token requests after a failure
+        since_last_failure = time.monotonic() - self._last_token_failure
+        if self._last_token_failure and since_last_failure < 2.0:
+            time.sleep(2.0 - since_last_failure)
+        try:
+            resp = requests.post(TOKEN_URL, data={
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+                "grant_type": "client_credentials",
+            }, timeout=DEFAULT_TIMEOUT)
+            resp.raise_for_status()
+        except Exception:
+            self._last_token_failure = time.monotonic()
+            raise
         data = resp.json()
         self._token = data["access_token"]
+        self._last_token_failure = 0.0
         # Refresh 60s before actual expiry to avoid edge-case 401s
         self._token_expires_at = time.monotonic() + data.get("expires_in", 3600) - 60
         return self._token
@@ -47,7 +57,7 @@ class TwitchClient:
             kwargs["timeout"] = DEFAULT_TIMEOUT
         resp: requests.Response | None = None
         for attempt in range(3):
-            resp = requests.request(method, url, headers=self._headers(), **kwargs)
+            resp = requests.request(method, url, headers=self._headers(), verify=True, **kwargs)
             if resp.status_code == 401:
                 self._token = None
                 if attempt < 2:

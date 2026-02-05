@@ -3,8 +3,8 @@ import os
 import shutil
 import subprocess
 
+from src.media_utils import is_valid_video
 from src.models import Clip
-from src.video_processor import FFPROBE
 
 log = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ def download_clip(clip: Clip, tmp_dir: str) -> str | None:
     output_path = os.path.join(tmp_dir, f"{clip.id}.mp4")
     tmp_path = output_path + ".part"
 
-    if os.path.exists(output_path) and _is_valid_video(output_path):
+    if os.path.exists(output_path) and is_valid_video(output_path):
         log.info("Clip already downloaded: %s", clip.id)
         return output_path
     if os.path.exists(output_path):
@@ -56,7 +56,7 @@ def download_clip(clip: Clip, tmp_dir: str) -> str | None:
         log.error("Download produced no file: %s", clip.id)
         return None
 
-    if not _is_valid_video(actual_path):
+    if not is_valid_video(actual_path):
         log.error("Download produced invalid file: %s", clip.id)
         os.remove(actual_path)
         return None
@@ -71,17 +71,3 @@ def download_clip(clip: Clip, tmp_dir: str) -> str | None:
 
     log.info("Downloaded clip %s (%d bytes)", clip.id, os.path.getsize(output_path))
     return output_path
-
-
-def _is_valid_video(path: str) -> bool:
-    """Validate a video file using ffprobe."""
-    try:
-        result = subprocess.run(
-            [FFPROBE, "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=codec_type", "-of", "csv=p=0", path],
-            capture_output=True, text=True, timeout=15,
-        )
-        return result.returncode == 0 and "video" in result.stdout
-    except Exception as e:
-        log.warning("Video validation failed for %s: %s", path, e)
-        return False

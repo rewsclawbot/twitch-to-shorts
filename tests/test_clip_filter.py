@@ -2,7 +2,7 @@ from datetime import datetime, timezone, timedelta
 
 import pytest
 
-from src.clip_filter import compute_score, compute_score_with_options, filter_and_rank
+from src.clip_filter import compute_score, filter_and_rank
 from tests.conftest import make_clip
 
 
@@ -54,20 +54,20 @@ class TestComputeScore:
             view_count=1000,
             created_at=(datetime.now(timezone.utc) - timedelta(hours=6)).isoformat(),
         )
-        linear = compute_score_with_options(clip, age_decay="linear")
-        log_decay = compute_score_with_options(clip, age_decay="log")
+        linear = compute_score(clip, age_decay="linear")
+        log_decay = compute_score(clip, age_decay="log")
         assert log_decay > linear
 
     def test_log_view_transform_reduces_score(self):
         clip = make_clip(view_count=1000)
-        linear = compute_score_with_options(clip, view_transform="linear")
-        log_view = compute_score_with_options(clip, view_transform="log")
+        linear = compute_score(clip, view_transform="linear")
+        log_view = compute_score(clip, view_transform="log")
         assert linear > log_view
 
     def test_title_quality_bonus_increases_score(self):
         clip = make_clip(title="OMG!!! 1v5 CLUTCH")
-        base = compute_score_with_options(clip, title_quality_weight=0.0)
-        boosted = compute_score_with_options(clip, title_quality_weight=0.1)
+        base = compute_score(clip, title_quality_weight=0.0)
+        boosted = compute_score(clip, title_quality_weight=0.1)
         assert boosted > base
 
 

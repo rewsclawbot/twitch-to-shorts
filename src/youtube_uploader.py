@@ -3,9 +3,12 @@ import json
 import logging
 import os
 import re
+import string
 import sys
 import time
 
+import httplib2
+import google_auth_httplib2
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.exceptions import RefreshError
@@ -108,7 +111,10 @@ def get_credentials(client_secrets_file: str, credentials_file: str) -> Credenti
 def get_authenticated_service(client_secrets_file: str, credentials_file: str):
     """Get an authenticated YouTube Data API service."""
     creds = get_credentials(client_secrets_file, credentials_file)
-    return build("youtube", "v3", credentials=creds)
+    authorized_http = google_auth_httplib2.AuthorizedHttp(
+        creds, http=httplib2.Http(timeout=30)
+    )
+    return build("youtube", "v3", http=authorized_http)
 
 
 def _truncate_title(title: str, max_len: int = 100) -> str:
@@ -129,8 +135,31 @@ class _TemplateDict(dict):
         return ""
 
 
+_VALID_TEMPLATE_KEYS = {"title", "streamer", "game", "game_name"}
+
+
+def validate_templates(templates: list[str] | None, label: str = "template") -> None:
+    """Log warnings for templates referencing unknown keys."""
+    if not templates:
+        return
+    formatter = string.Formatter()
+    for tmpl in templates:
+        try:
+            keys = {fname for _, fname, _, _ in formatter.parse(tmpl) if fname is not None}
+        except (ValueError, KeyError):
+            log.warning("Invalid format string in %s: %s", label, tmpl)
+            continue
+        unknown = keys - _VALID_TEMPLATE_KEYS
+        if unknown:
+            log.warning(
+                "%s references unknown keys %s (valid: %s): %s",
+                label, unknown, _VALID_TEMPLATE_KEYS, tmpl,
+            )
+
+
 def _sanitize_text(text: str) -> str:
-    return re.sub(r"[\x00-\x1f<>]", "", text).strip()
+    return re.sub(r"[\x00-\x1f<>\u200e\u200f\u202a-\u202e\u2066-\u2069]", "", text).strip()
+
 
 
 def _render_template(template: str, clip: Clip) -> str:
@@ -254,7 +283,7 @@ def upload_short(
         },
     }
 
-    media = MediaFileUpload(video_path, mimetype="video/mp4", resumable=True)
+    media = MediaFileUpload(video_path, mimetype="video/mp4", resumable=True, chunksize=5 * 1024 * 1024)
 
     log.info("Uploading: %s", full_title)
     try:
@@ -297,19 +326,27 @@ def upload_short(
         return None
 
 
+_uploads_playlist_cache: dict[int, str] = {}
+
+
 def check_channel_for_duplicate(service, clip_title: str, max_results: int = 50) -> str | None:
     """Check channel's recent uploads for a video with a matching title.
 
-    Uses playlistItems.list on the uploads playlist (2 quota units total).
+    Uses playlistItems.list on the uploads playlist (2 quota units total on first call,
+    1 quota unit on subsequent calls due to cached uploads playlist ID).
     Returns the youtube_id if a duplicate is found, None otherwise.
     """
     try:
-        ch_resp = service.channels().list(part="contentDetails", mine=True).execute()
-        items = ch_resp.get("items", [])
-        if not items:
-            log.warning("No channel found for authenticated user")
-            return None
-        uploads_playlist = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+        service_id = id(service)
+        uploads_playlist = _uploads_playlist_cache.get(service_id)
+        if uploads_playlist is None:
+            ch_resp = service.channels().list(part="contentDetails", mine=True).execute()
+            items = ch_resp.get("items", [])
+            if not items:
+                log.warning("No channel found for authenticated user")
+                return None
+            uploads_playlist = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+            _uploads_playlist_cache[service_id] = uploads_playlist
 
         page_token = None
         checked = 0
@@ -334,6 +371,10 @@ def check_channel_for_duplicate(service, clip_title: str, max_results: int = 50)
                 break
         return None
     except HttpError as e:
+        reason = _extract_error_reason(e)
+        if e.resp.status in (401, 403) and reason not in QUOTA_REASONS:
+            log.error("Channel duplicate check fatal error (HTTP %s): %s", e.resp.status, e)
+            raise
         log.warning("Channel duplicate check failed (HTTP %s): %s", e.resp.status, e)
         return None
     except Exception:

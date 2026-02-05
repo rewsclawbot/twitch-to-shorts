@@ -58,13 +58,30 @@ class TestRecordKnownClip:
         original_posted = conn.execute("SELECT posted_at FROM clips WHERE clip_id = 'dup2'").fetchone()["posted_at"]
         assert original_posted is not None
 
-        # Now record_known_clip with a different youtube_id
+        # record_known_clip with a different youtube_id should NOT overwrite existing
         clip.youtube_id = "yt_different"
         record_known_clip(conn, clip)
 
         row = conn.execute("SELECT posted_at, youtube_id FROM clips WHERE clip_id = 'dup2'").fetchone()
         assert row["posted_at"] == original_posted  # preserved
-        assert row["youtube_id"] == "yt_different"  # updated
+        assert row["youtube_id"] == "yt_original"  # preserved (COALESCE keeps existing)
+
+    def test_record_known_clip_sets_youtube_id_when_null(self, conn):
+        """If a clip has no youtube_id, record_known_clip should set it."""
+        clip = make_clip(clip_id="dup3", youtube_id=None)
+        # Insert with no youtube_id via increment_fail_count to create a row without youtube_id
+        from src.db import increment_fail_count
+        increment_fail_count(conn, clip)
+
+        row = conn.execute("SELECT youtube_id FROM clips WHERE clip_id = 'dup3'").fetchone()
+        assert row["youtube_id"] is None
+
+        # Now record_known_clip should fill in the youtube_id
+        clip.youtube_id = "yt_new"
+        record_known_clip(conn, clip)
+
+        row = conn.execute("SELECT youtube_id FROM clips WHERE clip_id = 'dup3'").fetchone()
+        assert row["youtube_id"] == "yt_new"
 
 
 class TestIncrementFailCount:
