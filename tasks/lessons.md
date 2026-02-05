@@ -143,6 +143,21 @@
 
 ## 2026-02-05 — Upload Spacing vs Cron Interval
 
+### Loop slicing starves fallback candidates (Bug #8)
+- `for clip in new_clips[:uploads_remaining]` with `uploads_remaining=1` means only 1 clip enters the loop. If it's skipped (duration >60s, download failure), no fallback to clip #2. A single bad clip starves uploads for up to 7 days.
+- **Fix**: Iterate all candidates, break after `uploads_remaining` successful uploads. Decrement counter only on success, not on loop entry.
+- **Rule**: When a loop has skip/continue paths, never pre-slice the iterable to the expected success count. Slice limits success + failure combined; you want to limit only successes.
+
+### Self-matching overlap blocks retry mechanism (Bug #2)
+- `increment_fail_count` inserts a DB row with `created_at`. On retry, `clip_overlaps` matches the clip against its own DB row (delta = 0s < 30s). The retry mechanism was dead code.
+- **Fix**: Add `exclude_clip_id` param to `clip_overlaps`. Pass it in `filter_new_clips`.
+- **Rule**: Any dedup function that checks "does a similar record exist?" must exclude the record being checked when it might already be in the database. Self-match is the most common dedup false positive.
+
+### Duplicate recording poisons spacing window (Bug #18)
+- When `check_channel_for_duplicate` finds an existing video, `insert_clip` was called which hardcodes `posted_at = datetime.now()`. This made the duplicate look like a fresh upload, consuming the spacing window and blocking real uploads for hours.
+- **Fix**: Add `record_known_clip()` that sets `youtube_id` without touching `posted_at`. Use it for duplicates instead of `insert_clip`.
+- **Rule**: Recording "this clip exists externally" is a different operation than "we just uploaded this clip." They need different DB functions with different side effects. Don't reuse insert functions that set timestamps for recording pre-existing state.
+
 ### Spacing thresholds must account for execution delay variance
 - `upload_spacing_hours: 4` matched the cron interval (every 4h), leaving zero tolerance for GitHub Actions delay variance. Delays range 58m–2h36m, so the worst-case wall-clock gap between consecutive slots is `4h - (max_delay - min_delay)` = ~2h22m. A 4h spacing check on actual upload times (`posted_at`) blocked valid cron slots whenever `slot_B_delay < slot_A_delay`.
 - **Rule**: `upload_spacing_hours` must be strictly less than `cron_interval - max_delay_variance`. With 4h cron and ~1h38m observed variance, 2h gives safe margin. The cron schedule + `max_uploads_per_window` are the primary rate limiters — spacing is just a safety net against rapid-fire manual runs.

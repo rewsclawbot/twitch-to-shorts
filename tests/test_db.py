@@ -4,6 +4,7 @@ import pytest
 
 from src.db import (
     insert_clip,
+    record_known_clip,
     increment_fail_count,
     recent_upload_count,
     update_streamer_stats,
@@ -37,6 +38,33 @@ class TestInsertClip:
         assert row["title"] == "V2"
         assert row["view_count"] == 999
         assert row["youtube_id"] == "yt_updated"
+
+
+class TestRecordKnownClip:
+    def test_record_known_clip_does_not_set_posted_at(self, conn):
+        """record_known_clip should leave posted_at as NULL."""
+        clip = make_clip(clip_id="dup1", youtube_id="yt_ext")
+        record_known_clip(conn, clip)
+
+        row = conn.execute("SELECT posted_at, youtube_id FROM clips WHERE clip_id = 'dup1'").fetchone()
+        assert row["youtube_id"] == "yt_ext"
+        assert row["posted_at"] is None
+
+    def test_record_known_clip_does_not_overwrite_posted_at(self, conn):
+        """If a clip already has a posted_at (real upload), record_known_clip should preserve it."""
+        clip = make_clip(clip_id="dup2", youtube_id="yt_original")
+        insert_clip(conn, clip)
+
+        original_posted = conn.execute("SELECT posted_at FROM clips WHERE clip_id = 'dup2'").fetchone()["posted_at"]
+        assert original_posted is not None
+
+        # Now record_known_clip with a different youtube_id
+        clip.youtube_id = "yt_different"
+        record_known_clip(conn, clip)
+
+        row = conn.execute("SELECT posted_at, youtube_id FROM clips WHERE clip_id = 'dup2'").fetchone()
+        assert row["posted_at"] == original_posted  # preserved
+        assert row["youtube_id"] == "yt_different"  # updated
 
 
 class TestIncrementFailCount:
@@ -137,6 +165,20 @@ class TestClipOverlaps:
         )
         conn.commit()
         assert clip_overlaps(conn, "streamer_b", (base + timedelta(seconds=5)).isoformat()) is False
+
+
+    def test_exclude_clip_id_ignores_self_match(self, conn):
+        """A clip should not overlap with its own DB row."""
+        base = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        conn.execute(
+            "INSERT INTO clips (clip_id, streamer, created_at) VALUES (?, ?, ?)",
+            ("self1", "s", base.isoformat()),
+        )
+        conn.commit()
+        # Without exclude_clip_id, the clip matches itself
+        assert clip_overlaps(conn, "s", base.isoformat()) is True
+        # With exclude_clip_id, the self-match is ignored
+        assert clip_overlaps(conn, "s", base.isoformat(), exclude_clip_id="self1") is False
 
 
 class TestYouTubeMetrics:

@@ -30,6 +30,7 @@ from src.youtube_analytics import get_analytics_service, fetch_video_metrics
 from src.db import (
     get_connection,
     insert_clip,
+    record_known_clip,
     update_streamer_stats,
     recent_upload_count,
     increment_fail_count,
@@ -354,7 +355,9 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
         quota_exhausted = False
         consecutive_403s = 0
         max_duration = cfg.max_clip_duration_seconds
-        for clip in new_clips[:uploads_remaining]:
+        for clip in new_clips:
+            if uploads_remaining <= 0:
+                break
             if clip.duration > max_duration:
                 log.info("Skipping clip %s (%.1fs > %ds max duration)", clip.id, clip.duration, max_duration)
                 continue
@@ -390,7 +393,7 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
             if existing_yt_id:
                 log.warning("Clip %s already on channel as %s — recording and skipping", clip.id, existing_yt_id)
                 clip.youtube_id = existing_yt_id
-                insert_clip(conn, clip)
+                record_known_clip(conn, clip)
                 _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
                 continue
 
@@ -425,6 +428,7 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
             clip.youtube_id = youtube_id
             insert_clip(conn, clip)
             total_uploaded += 1
+            uploads_remaining -= 1
             log.info("Uploaded clip %s -> YouTube %s", clip.id, youtube_id)
 
             if not verify_upload(yt_service, youtube_id):

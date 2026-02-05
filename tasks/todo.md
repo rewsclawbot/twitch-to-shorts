@@ -1,3 +1,19 @@
+# Latent Bug Fixes (2026-02-05)
+
+## Completed
+
+- [x] **Bug #8 (P1):** Upload starvation — loop over all candidates, break on `uploads_remaining <= 0`, decrement only on success (`main.py:357-359, 428`)
+- [x] **Bug #2 (P1):** Dead retries — add `exclude_clip_id` to `clip_overlaps` (`src/db.py:67-78`), pass `c.id` in `filter_new_clips` (`src/dedup.py:39`)
+- [x] **Bug #18 (P2):** Spacing poisoning — add `record_known_clip` (`src/db.py:101-113`), use for duplicates (`main.py:394`)
+- [x] **Tests:** 4 new tests (48 total, all passing)
+  - `test_exclude_clip_id_ignores_self_match` (test_db.py)
+  - `test_record_known_clip_does_not_set_posted_at` (test_db.py)
+  - `test_record_known_clip_does_not_overwrite_posted_at` (test_db.py)
+  - `test_failed_clip_can_retry` (test_dedup.py)
+- [x] **Lessons:** Updated `tasks/lessons.md` with patterns for all 3 bugs
+
+---
+
 # Competition Audit: twitch-to-shorts
 
 Plan lives in `tasks/roadmap.md` under **Execution Plan**.

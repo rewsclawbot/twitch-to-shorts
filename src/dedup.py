@@ -36,5 +36,5 @@ def filter_new_clips(conn: sqlite3.Connection, clips: list[Clip]) -> list[Clip]:
         c for c in clips
         if c.id not in existing
         and c.id not in blocklist
-        and not clip_overlaps(conn, c.streamer, c.created_at)
+        and not clip_overlaps(conn, c.streamer, c.created_at, exclude_clip_id=c.id)
     ]

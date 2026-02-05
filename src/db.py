@@ -64,13 +64,15 @@ def init_schema(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE clips ADD COLUMN yt_last_sync TEXT")
 
 
-def clip_overlaps(conn: sqlite3.Connection, streamer: str, created_at: str, window_seconds: int = 30) -> bool:
+def clip_overlaps(conn: sqlite3.Connection, streamer: str, created_at: str, window_seconds: int = 30, exclude_clip_id: str | None = None) -> bool:
     """Check if a clip from the same streamer exists within window_seconds of created_at."""
-    row = conn.execute(
-        """SELECT 1 FROM clips WHERE streamer = ?
-           AND ABS(julianday(created_at) - julianday(?)) * 86400 < ?""",
-        (streamer, created_at, window_seconds),
-    ).fetchone()
+    query = """SELECT 1 FROM clips WHERE streamer = ?
+           AND ABS(julianday(created_at) - julianday(?)) * 86400 < ?"""
+    params: list = [streamer, created_at, window_seconds]
+    if exclude_clip_id:
+        query += " AND clip_id != ?"
+        params.append(exclude_clip_id)
+    row = conn.execute(query, params).fetchone()
     return row is not None
 
 
@@ -95,6 +97,20 @@ def insert_clip(conn: sqlite3.Connection, clip: Clip):
                title = excluded.title""",
         (clip.id, clip.streamer, clip.title, clip.view_count,
          clip.created_at, datetime.now(timezone.utc).isoformat(), clip.youtube_id),
+    )
+    conn.commit()
+
+
+def record_known_clip(conn: sqlite3.Connection, clip: Clip):
+    """Record a clip that's already on YouTube (duplicate). Does not set posted_at."""
+    conn.execute(
+        """INSERT INTO clips (clip_id, streamer, title, view_count, created_at, youtube_id)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(clip_id) DO UPDATE SET
+               youtube_id = excluded.youtube_id,
+               view_count = excluded.view_count,
+               title = excluded.title""",
+        (clip.id, clip.streamer, clip.title, clip.view_count, clip.created_at, clip.youtube_id),
     )
     conn.commit()
 

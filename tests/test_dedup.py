@@ -3,7 +3,7 @@ from datetime import datetime, timezone, timedelta
 import pytest
 
 from src.dedup import filter_new_clips
-from src.db import insert_clip
+from src.db import insert_clip, increment_fail_count
 from tests.conftest import make_clip
 
 
@@ -63,6 +63,22 @@ class TestFilterNewClips:
         result = filter_new_clips(conn, [new_clip])
         assert len(result) == 1
         assert result[0].id == "totally_new"
+
+    def test_failed_clip_can_retry(self, conn):
+        """A clip recorded via increment_fail_count should still pass filter_new_clips."""
+        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        clip = make_clip(
+            clip_id="retry_me",
+            streamer="streamer_x",
+            created_at=base_time.isoformat(),
+        )
+        # Simulate a prior failure — this inserts a DB row with created_at
+        increment_fail_count(conn, clip)
+
+        # The same clip should still pass through filter_new_clips (fail_count < 3)
+        result = filter_new_clips(conn, [clip])
+        assert len(result) == 1
+        assert result[0].id == "retry_me"
 
     def test_different_streamer_same_timestamp_passes(self, conn):
         """Overlap detection is scoped to the same streamer."""
