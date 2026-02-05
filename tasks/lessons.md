@@ -129,6 +129,14 @@
 - `gh run download --name <artifact>` in a fallback step after cache miss provides a second restoration path at zero additional cost (artifacts are already uploaded on success).
 - **Rule**: For critical state, upload as both cache (fast restore) and artifact (durable fallback). Use `cache-hit` output to conditionally download artifact.
 
-### Re-encode secrets locally with Python, not shell pipes
-- `base64 -w0 file | gh secret set NAME --body -` can silently corrupt on some platforms/shells. Python's `base64.b64encode()` piped to `gh secret set NAME` is deterministic and cross-platform.
-- **Rule**: When re-setting GitHub secrets, always use `python -c "import base64; print(base64.b64encode(open('file','rb').read()).decode())" | gh secret set NAME`. This has been validated to work reliably.
+### `gh secret set --body -` does NOT read from stdin
+- `gh secret set NAME --body -` sets the secret to the **literal string `"-"`**, not stdin. This is unlike most CLI tools where `-` means stdin. The `gh` CLI reads from stdin only when `--body` is omitted entirely.
+- This was a silent time bomb: every successful pipeline run saved `"-"` as the token secret, corrupting it for the next run. The next run would fail at `base64 -d` with `base64: invalid input`.
+- **Correct**: `base64 -w0 file | gh secret set NAME` (no `--body` flag)
+- **Wrong**: `base64 -w0 file | gh secret set NAME --body -`
+- **Rule**: Never use `--body -` with `gh secret set`. Omit `--body` to read from stdin. When re-setting secrets manually, prefer Python: `python -c "import base64; print(base64.b64encode(open('file','rb').read()).decode())" | gh secret set NAME`.
+
+### A self-corrupting pipeline can pass N times before you notice
+- The `--body -` bug was present from the start but masked: we'd manually re-set secrets, the next run would succeed, its token save would corrupt the secret, and the following run would fail. We blamed "secret corruption" without realizing the pipeline itself was the corruption source.
+- Two consecutive successful runs is the minimum bar for proving a CI secret round-trips correctly. One success proves nothing — it might be consuming a manually-set good value while writing back garbage.
+- **Rule**: After fixing any CI secret handling, trigger two back-to-back runs. If the second one fails at credential restore, the save step is corrupting the secret.
