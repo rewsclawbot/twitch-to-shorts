@@ -45,6 +45,23 @@ class TestFilterNewClips:
         result = filter_new_clips(conn, [overlapping])
         assert len(result) == 0
 
+    def test_batch_overlap_within_same_run(self, conn):
+        """Two new clips in the same batch within 30s should not both pass."""
+        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        first = make_clip(
+            clip_id="batch_1",
+            streamer="streamer_x",
+            created_at=base_time.isoformat(),
+        )
+        second = make_clip(
+            clip_id="batch_2",
+            streamer="streamer_x",
+            created_at=(base_time + timedelta(seconds=20)).isoformat(),
+        )
+        result = filter_new_clips(conn, [first, second])
+        assert len(result) == 1
+        assert result[0].id == "batch_1"
+
     def test_passes_through_genuinely_new_clips(self, conn):
         """A clip with a new ID and no timestamp overlap should pass through."""
         base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)

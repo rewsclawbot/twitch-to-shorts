@@ -11,6 +11,7 @@ class Clip:
     duration: float
     game_id: str = ""
     streamer: str = ""
+    channel_key: str = ""
     game_name: str = ""
     score: float = 0.0
     youtube_id: str | None = None

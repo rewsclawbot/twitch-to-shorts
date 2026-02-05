@@ -24,6 +24,7 @@ from src.youtube_uploader import (
     verify_upload,
     set_thumbnail,
     check_channel_for_duplicate,
+    ForbiddenError,
     QuotaExhaustedError,
 )
 from src.youtube_analytics import get_analytics_service, fetch_video_metrics
@@ -290,6 +291,7 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
     for streamer in streamers:
         name = streamer.name
         twitch_id = streamer.twitch_id
+        channel_key = streamer.youtube_credentials or name
         log.info("=== Processing streamer: %s ===", name)
 
         try:
@@ -306,6 +308,7 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
 
         for c in clips:
             c.streamer = name
+            c.channel_key = channel_key
 
         ranked = filter_and_rank(
             conn, clips, name,
@@ -318,6 +321,12 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
         )
 
         new_clips = filter_new_clips(conn, ranked)
+        max_duration = cfg.max_clip_duration_seconds
+        if new_clips:
+            too_long = [c for c in new_clips if c.duration > max_duration]
+            if too_long:
+                log.info("Skipping %d clips over %ds before max_clips_per_streamer cap", len(too_long), max_duration)
+            new_clips = [c for c in new_clips if c.duration <= max_duration]
         new_clips = new_clips[:cfg.max_clips_per_streamer]
         total_filtered += len(new_clips)
         log.info("%d new clips after dedup (from %d ranked)", len(new_clips), len(ranked))
@@ -335,7 +344,7 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
             c.game_name = game_names.get(c.game_id, "")
 
         # Upload scheduling: max 1 upload per streamer per 2 hours
-        recent = recent_upload_count(conn, name, cfg.upload_spacing_hours)
+        recent = recent_upload_count(conn, name, cfg.upload_spacing_hours, channel_key=channel_key)
         uploads_remaining = max(cfg.max_uploads_per_window - recent, 0)
         if uploads_remaining == 0:
             log.info("Skipping uploads for %s: %d uploaded in last %dh", name, recent, cfg.upload_spacing_hours)
@@ -354,13 +363,9 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
 
         quota_exhausted = False
         consecutive_403s = 0
-        max_duration = cfg.max_clip_duration_seconds
         for clip in new_clips:
             if uploads_remaining <= 0:
                 break
-            if clip.duration > max_duration:
-                log.info("Skipping clip %s (%.1fs > %ds max duration)", clip.id, clip.duration, max_duration)
-                continue
 
             video_path = download_clip(clip, cfg.tmp_dir)
             if not video_path:
@@ -411,8 +416,7 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
                 _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
                 quota_exhausted = True
                 break
-
-            if not youtube_id:
+            except ForbiddenError:
                 increment_fail_count(conn, clip)
                 total_failed += 1
                 consecutive_403s += 1
@@ -420,6 +424,13 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
                 if consecutive_403s >= 3:
                     log.warning("3 consecutive upload failures for %s — skipping remaining clips", name)
                     break
+                continue
+
+            if not youtube_id:
+                increment_fail_count(conn, clip)
+                total_failed += 1
+                consecutive_403s = 0
+                _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
                 continue
 
             # Record to DB immediately after upload succeeds — before verify/thumbnail.

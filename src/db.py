@@ -19,6 +19,7 @@ def init_schema(conn: sqlite3.Connection):
         CREATE TABLE IF NOT EXISTS clips (
             clip_id TEXT PRIMARY KEY,
             streamer TEXT NOT NULL,
+            channel_key TEXT,
             title TEXT,
             view_count INTEGER,
             created_at TEXT,
@@ -42,12 +43,15 @@ def init_schema(conn: sqlite3.Connection):
         );
 
         CREATE INDEX IF NOT EXISTS idx_clips_streamer ON clips(streamer);
+        CREATE INDEX IF NOT EXISTS idx_clips_channel ON clips(channel_key);
         CREATE INDEX IF NOT EXISTS idx_clips_posted ON clips(posted_at);
     """)
     # Migration: add fail_count column if missing (existing DBs)
     cols = {row[1] for row in conn.execute("PRAGMA table_info(clips)").fetchall()}
     if "fail_count" not in cols:
         conn.execute("ALTER TABLE clips ADD COLUMN fail_count INTEGER DEFAULT 0")
+    if "channel_key" not in cols:
+        conn.execute("ALTER TABLE clips ADD COLUMN channel_key TEXT")
     if "yt_views" not in cols:
         conn.execute("ALTER TABLE clips ADD COLUMN yt_views INTEGER")
     if "yt_estimated_minutes_watched" not in cols:
@@ -76,26 +80,42 @@ def clip_overlaps(conn: sqlite3.Connection, streamer: str, created_at: str, wind
     return row is not None
 
 
-def recent_upload_count(conn: sqlite3.Connection, streamer: str, hours: int = 4) -> int:
-    """Count clips uploaded for a streamer within the last N hours."""
+def recent_upload_count(
+    conn: sqlite3.Connection,
+    streamer: str,
+    hours: int = 4,
+    channel_key: str | None = None,
+) -> int:
+    """Count clips uploaded for a streamer/channel within the last N hours."""
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-    row = conn.execute(
-        "SELECT COUNT(*) as cnt FROM clips WHERE streamer = ? AND posted_at >= ? AND youtube_id IS NOT NULL",
-        (streamer, cutoff),
-    ).fetchone()
+    if channel_key:
+        row = conn.execute(
+            """SELECT COUNT(*) as cnt
+               FROM clips
+               WHERE posted_at >= ?
+                 AND youtube_id IS NOT NULL
+                 AND (channel_key = ? OR (channel_key IS NULL AND streamer = ?))""",
+            (cutoff, channel_key, streamer),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM clips WHERE streamer = ? AND posted_at >= ? AND youtube_id IS NOT NULL",
+            (streamer, cutoff),
+        ).fetchone()
     return row["cnt"] if row else 0
 
 
 def insert_clip(conn: sqlite3.Connection, clip: Clip):
     conn.execute(
-        """INSERT INTO clips (clip_id, streamer, title, view_count, created_at, posted_at, youtube_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
+        """INSERT INTO clips (clip_id, streamer, channel_key, title, view_count, created_at, posted_at, youtube_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(clip_id) DO UPDATE SET
                youtube_id = excluded.youtube_id,
                posted_at = excluded.posted_at,
                view_count = excluded.view_count,
-               title = excluded.title""",
-        (clip.id, clip.streamer, clip.title, clip.view_count,
+               title = excluded.title,
+               channel_key = excluded.channel_key""",
+        (clip.id, clip.streamer, clip.channel_key, clip.title, clip.view_count,
          clip.created_at, datetime.now(timezone.utc).isoformat(), clip.youtube_id),
     )
     conn.commit()
@@ -104,13 +124,14 @@ def insert_clip(conn: sqlite3.Connection, clip: Clip):
 def record_known_clip(conn: sqlite3.Connection, clip: Clip):
     """Record a clip that's already on YouTube (duplicate). Does not set posted_at."""
     conn.execute(
-        """INSERT INTO clips (clip_id, streamer, title, view_count, created_at, youtube_id)
-           VALUES (?, ?, ?, ?, ?, ?)
+        """INSERT INTO clips (clip_id, streamer, channel_key, title, view_count, created_at, youtube_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(clip_id) DO UPDATE SET
                youtube_id = excluded.youtube_id,
                view_count = excluded.view_count,
-               title = excluded.title""",
-        (clip.id, clip.streamer, clip.title, clip.view_count, clip.created_at, clip.youtube_id),
+               title = excluded.title,
+               channel_key = excluded.channel_key""",
+        (clip.id, clip.streamer, clip.channel_key, clip.title, clip.view_count, clip.created_at, clip.youtube_id),
     )
     conn.commit()
 
@@ -144,10 +165,10 @@ def update_streamer_stats(conn: sqlite3.Connection, streamer: str):
 def increment_fail_count(conn: sqlite3.Connection, clip: Clip):
     """Record a processing failure. Upserts clip row and increments fail_count."""
     conn.execute(
-        """INSERT INTO clips (clip_id, streamer, created_at, fail_count)
-           VALUES (?, ?, ?, 1)
+        """INSERT INTO clips (clip_id, streamer, channel_key, created_at, fail_count)
+           VALUES (?, ?, ?, ?, 1)
            ON CONFLICT(clip_id) DO UPDATE SET fail_count = fail_count + 1""",
-        (clip.id, clip.streamer, clip.created_at),
+        (clip.id, clip.streamer, clip.channel_key, clip.created_at),
     )
     conn.commit()
 

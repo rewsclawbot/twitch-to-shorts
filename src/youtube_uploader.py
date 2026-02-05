@@ -36,6 +36,10 @@ class QuotaExhaustedError(Exception):
     """Raised when YouTube API quota is exhausted."""
 
 
+class ForbiddenError(Exception):
+    """Raised when YouTube API returns 403 for an upload."""
+
+
 def _extract_error_reason(err: HttpError) -> str:
     if isinstance(err.error_details, list):
         for detail in err.error_details:
@@ -285,7 +289,7 @@ def upload_short(
             raise QuotaExhaustedError(reason) from e
         if e.resp.status == 403:
             log.error("YouTube 403 forbidden for %s: %s", full_title, reason or "unknown")
-            return None
+            raise ForbiddenError(reason or "unknown") from e
         log.exception("Upload failed for %s (status=%s reason=%s)", full_title, e.resp.status, reason or "unknown")
         return None
     except Exception:
