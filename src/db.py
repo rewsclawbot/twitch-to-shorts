@@ -43,15 +43,16 @@ def init_schema(conn: sqlite3.Connection):
         );
 
         CREATE INDEX IF NOT EXISTS idx_clips_streamer ON clips(streamer);
-        CREATE INDEX IF NOT EXISTS idx_clips_channel ON clips(channel_key);
         CREATE INDEX IF NOT EXISTS idx_clips_posted ON clips(posted_at);
     """)
-    # Migration: add fail_count column if missing (existing DBs)
+    # Migration: add columns if missing (existing cached DBs may lack them)
     cols = {row[1] for row in conn.execute("PRAGMA table_info(clips)").fetchall()}
     if "fail_count" not in cols:
         conn.execute("ALTER TABLE clips ADD COLUMN fail_count INTEGER DEFAULT 0")
     if "channel_key" not in cols:
         conn.execute("ALTER TABLE clips ADD COLUMN channel_key TEXT")
+    # Index on channel_key must be created AFTER the migration adds the column
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_clips_channel ON clips(channel_key)")
     if "yt_views" not in cols:
         conn.execute("ALTER TABLE clips ADD COLUMN yt_views INTEGER")
     if "yt_estimated_minutes_watched" not in cols:
