@@ -98,3 +98,37 @@
 ### Non-quota 403s should skip, not halt — but add a circuit breaker
 - YouTube 403s can be clip-specific (content policy) or channel-level (suspension/strike). Halting the entire pipeline on any 403 is too conservative (wastes remaining quota). Skipping without limit is too aggressive (burns quota on doomed retries if the channel is banned).
 - **Rule**: Skip on 403 but track consecutive failures. After 3 in a row, assume the issue is channel-level and stop uploading for that streamer.
+
+## 2026-02-04 — Upload Reliability (3-Layer Duplicate Defense)
+
+### Record state BEFORE fallible post-processing
+- There was a ~40-line gap between `upload_short()` returning a youtube_id and `insert_clip()` writing it to DB. If `verify_upload()` or `set_thumbnail()` crashed/returned false, the upload was orphaned — no DB record, so the next run would re-upload.
+- A phantom DB entry (upload recorded but verify failed) is trivially cleanable. A duplicate YouTube upload is not.
+- **Rule**: When an operation has an irreversible side effect (upload to external service), record it to your local state store immediately. Do verification and enrichment after. "Record then verify" beats "verify then record."
+
+### Defense-in-depth beats single-point-of-failure state
+- SQLite DB was the sole dedup mechanism. It lived on ephemeral CI runners with fragile cache persistence. Cache miss = full re-upload of everything.
+- Fix: 3 independent layers — (1) DB insert before verify, (2) artifact fallback when cache misses, (3) YouTube channel title check before upload.
+- **Rule**: For destructive/irreversible operations, never rely on a single state source. Add at least one fallback that can reconstruct state from the authoritative external system.
+
+### `playlistItems.list` is 50x cheaper than `search.list` for channel dedup
+- YouTube `search.list` costs 100 quota units. `channels.list` (1 unit) + `playlistItems.list` (1 unit per page of 50) = 2 units to check 50 recent uploads.
+- **Rule**: Always check YouTube API quota costs before choosing an endpoint. The "obvious" endpoint (`search`) is often the most expensive.
+
+### Extract shared logic when adding pre-checks
+- The duplicate check needed the same title that `upload_short()` would generate. Rather than duplicating template rendering, extract `build_upload_title()` and have both call it.
+- **Rule**: When a pre-check needs the same derived value as the main operation, extract the computation into a shared function. Don't duplicate the logic.
+
+### Guard CI secret saves against empty/missing files
+- `if: always()` on token save is correct (refreshed tokens must persist even on pipeline failure), but without a file existence check, a failed run that never created the credentials file would overwrite the secret with empty data.
+- `base64: invalid input` on restore is the telltale sign of a corrupted secret.
+- **Rule**: Always wrap `gh secret set` with `if [ -s file ]` to prevent saving empty/missing files. The `if: always()` and the file guard serve different purposes — you need both.
+
+### Artifacts are a reliable cache fallback
+- GitHub Actions cache can be evicted (10GB limit, 7-day TTL) or lost (delete succeeds but save fails). Artifacts from `upload-artifact` are independently stored and retained for the configured period.
+- `gh run download --name <artifact>` in a fallback step after cache miss provides a second restoration path at zero additional cost (artifacts are already uploaded on success).
+- **Rule**: For critical state, upload as both cache (fast restore) and artifact (durable fallback). Use `cache-hit` output to conditionally download artifact.
+
+### Re-encode secrets locally with Python, not shell pipes
+- `base64 -w0 file | gh secret set NAME --body -` can silently corrupt on some platforms/shells. Python's `base64.b64encode()` piped to `gh secret set NAME` is deterministic and cross-platform.
+- **Rule**: When re-setting GitHub secrets, always use `python -c "import base64; print(base64.b64encode(open('file','rb').read()).decode())" | gh secret set NAME`. This has been validated to work reliably.
