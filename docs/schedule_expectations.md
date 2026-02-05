@@ -150,8 +150,8 @@ Based on current filter ranking with DB + blocklist exclusions:
 | ~~1~~    | ~~HutchMF impersonation~~               | 60s      | 2,306 | Uploaded `Liyu0YNmG8g` (Feb 5, 04:00 slot) |
 | ~~2~~    | ~~THIS GUY KILL PEANUT~~                | 30s      | 1,699 | Uploaded `nPUjFuGmaD4` (Feb 5, 08:00 slot) |
 | ~~3~~    | ~~Michael Jackson HEE HEE~~             | 44s      | 1,334 | Uploaded `Pu8q4adi0M8` (Feb 5, 12:00 slot) |
-| **4**    | **CLOAK SNATCHED AWAY**                 | 10s      | 600   | **Next up** (Feb 5, 16:00 slot) |
-| 5        | Ultimate GOOP to the Snap hook flex!    | 44s      | 639   | Queued (Feb 5, 20:00 slot) |
+| **4**    | **CLOAK SNATCHED AWAY**                 | 10s      | 600   | **Next up** (Feb 5, 20:00 slot — bumped from 16:00 by spacing) |
+| 5        | Ultimate GOOP to the Snap hook flex!    | 44s      | 639   | Queued (Feb 5/6, 00:00 slot) |
 | 6        | money                                   | 30s      | 389   | Already on YT (`8QWb8hFFWEo`) — channel dedup will catch |
 
 After queue exhausts, next eligible clips (positions 9-13 in rankings):
@@ -179,12 +179,12 @@ PEANUT FACE LEAK!!! (483 views), aimbotter (379), macro sound (365), COULDNT EVE
 | 04:00      | ~05:00-06:30 UTC  | ~11 PM-12:30 AM  | HutchMF impersonation                 | Upload 1 clip |
 | 08:00      | ~09:00-10:30 UTC  | ~3-4:30 AM       | THIS GUY KILL PEANUT                  | Upload 1 clip |
 | 12:00      | ~13:00-14:30 UTC  | ~7-8:30 AM       | Michael Jackson HEE HEE               | Upload 1 clip |
-| 16:00      | ~17:00-18:30 UTC  | ~11 AM-12:30 PM  | CLOAK SNATCHED AWAY                   | Upload 1 clip |
-| 20:00      | ~21:00-22:30 UTC  | ~3-4:30 PM       | Ultimate GOOP to the Snap hook flex!  | Upload 1 clip |
-| 00:00      | ~01:00-02:30 UTC  | ~7-8:30 PM       | money → channel dedup catches         | Skip (or GitHub skips slot) |
-| 04:00      | ~05:00-06:30 UTC  | ~11 PM-12:30 AM  | PEANUT FACE LEAK!!!                   | Upload 1 clip |
+| 16:00      | ~17:00-18:30 UTC  | ~11 AM-12:30 PM  | CLOAK SNATCHED AWAY                   | Spacing-blocked (MJ HEE HEE <4h ago) |
+| 20:00      | ~21:00-22:30 UTC  | ~3-4:30 PM       | CLOAK SNATCHED AWAY (bumped from 16:00) | Upload 1 clip |
+| 00:00      | ~01:00-02:30 UTC  | ~7-8:30 PM       | Ultimate GOOP to the Snap hook flex!  | Upload 1 clip (or GitHub skips slot) |
+| 04:00      | ~05:00-06:30 UTC  | ~11 PM-12:30 AM  | money → channel dedup catches, then PEANUT FACE LEAK!!! | Upload 1 clip |
 
-**Feb 5 prediction:** 5 unique uploads, 0 duplicates (channel dedup blocks "money")
+**Feb 5 prediction (revised):** 4 unique uploads (spacing bumped queue by 1), 0 duplicates
 **Feb 5 actual so far:** 3 unique uploads, 0 duplicates, 0 failures — **on track**
 **Key test:** First fully unattended cycle with all 3-layer defense + `--body -` fix — **PASSING**
 
@@ -202,10 +202,10 @@ PEANUT FACE LEAK!!! (483 views), aimbotter (379), macro sound (365), COULDNT EVE
 | Feb 5, 04:00     | 05:08          | +1h 08m | HutchMF impersonation (`Liyu0YNmG8g`) | Yes | YES — exact match |
 | Feb 5, 08:00     | 10:08          | +2h 08m | THIS GUY KILL PEANUT (`nPUjFuGmaD4`) | Yes | YES — exact match |
 | Feb 5, 12:00     | 14:33          | +2h 33m | Michael Jackson HEE HEE (`Pu8q4adi0M8`) | Yes | YES — exact match |
-| Feb 5, 16:00     | 18:32          | +2h 32m | None (spacing limit — 1 uploaded in last 4h) | Yes | NO — predicted CLOAK SNATCHED AWAY but spacing blocked it (MJ HEE HEE at 14:39 was <4h ago) |
-| Feb 5, 20:00     |                |         |               |              | Predict: Ultimate GOOP... |
-| Feb 5/6, 00:00   |                |         |               |              | Predict: money (dedup skip or GitHub skip) |
-| Feb 6, 04:00     |                |         |               |              | Predict: PEANUT FACE LEAK!!! |
+| Feb 5, 16:00     | 18:32          | +2h 32m | None (spacing limit — 1 uploaded in last 4h) | Yes | NO — predicted CLOAK SNATCHED AWAY but spacing blocked it (MJ HEE HEE at 14:33 was <4h ago) |
+| Feb 5, 20:00     |                |         |               |              | Predict: CLOAK SNATCHED AWAY (bumped from 16:00, spacing clear) |
+| Feb 5/6, 00:00   |                |         |               |              | Predict: Ultimate GOOP... (or GitHub skips slot) |
+| Feb 6, 04:00     |                |         |               |              | Predict: money (dedup) → PEANUT FACE LEAK!!! |
 
 ### Scorecard (updated — Feb 5, ~19:00 UTC)
 
@@ -226,9 +226,9 @@ Post-fix pipeline streak: 4 consecutive — 0 failures, 0 duplicates
 - This means CLOAK SNATCHED AWAY is still next in queue for the 20:00 slot
 
 **Remaining predictions to validate:**
-- 20:00 slot: CLOAK SNATCHED AWAY (~21:00-22:30 trigger) — should succeed if >4h since MJ HEE HEE (14:39 + 4h = 18:39, will be clear)
-- 00:00 slot: Ultimate GOOP to the Snap hook flex! (queue shifted by 1 due to spacing skip) — or GitHub skips (historically skip-prone)
-- 04:00 slot: money → channel dedup should catch, then PEANUT FACE LEAK!!!
+- 20:00 slot: CLOAK SNATCHED AWAY (~21:00-22:30 trigger) — spacing clear (MJ HEE HEE at 14:33 was 6.5h+ ago)
+- 00:00 slot: Ultimate GOOP to the Snap hook flex! — or GitHub skips (historically skip-prone, both 00:00 slots skipped so far)
+- 04:00 slot: money → channel dedup catches, fallback to PEANUT FACE LEAK!!!
 
 **Takeaways:** (finalize after projection window closes)
 
