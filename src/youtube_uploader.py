@@ -187,6 +187,20 @@ def set_thumbnail(service, video_id: str, thumbnail_path: str) -> bool:
         return False
 
 
+def build_upload_title(
+    clip: Clip,
+    title_template: str | None = None,
+    title_templates: list[str] | None = None,
+) -> str:
+    """Build the YouTube title for a clip using the same logic as upload_short."""
+    chosen_title = _choose_template(clip.id, title_templates) or title_template
+    if chosen_title:
+        raw_title = _render_template(chosen_title, clip)
+    else:
+        raw_title = f"{clip.title} | {clip.streamer}"
+    return _truncate_title(_sanitize_text(raw_title))
+
+
 def upload_short(
     service,
     video_path: str,
@@ -206,12 +220,7 @@ def upload_short(
     streamer_name = clip.streamer
     game_name = clip.game_name
 
-    chosen_title = _choose_template(clip.id, title_templates) or title_template
-    if chosen_title:
-        raw_title = _render_template(chosen_title, clip)
-    else:
-        raw_title = f"{clip.title} | {streamer_name}"
-    full_title = _truncate_title(_sanitize_text(raw_title))
+    full_title = build_upload_title(clip, title_template, title_templates)
 
     chosen_description = _choose_template(clip.id, description_templates) or description_template
     if chosen_description:
@@ -281,6 +290,50 @@ def upload_short(
         return None
     except Exception:
         log.exception("Upload failed for %s", full_title)
+        return None
+
+
+def check_channel_for_duplicate(service, clip_title: str, max_results: int = 50) -> str | None:
+    """Check channel's recent uploads for a video with a matching title.
+
+    Uses playlistItems.list on the uploads playlist (2 quota units total).
+    Returns the youtube_id if a duplicate is found, None otherwise.
+    """
+    try:
+        ch_resp = service.channels().list(part="contentDetails", mine=True).execute()
+        items = ch_resp.get("items", [])
+        if not items:
+            log.warning("No channel found for authenticated user")
+            return None
+        uploads_playlist = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+
+        page_token = None
+        checked = 0
+        while checked < max_results:
+            page_size = min(50, max_results - checked)
+            pl_resp = service.playlistItems().list(
+                part="snippet",
+                playlistId=uploads_playlist,
+                maxResults=page_size,
+                pageToken=page_token,
+            ).execute()
+
+            for item in pl_resp.get("items", []):
+                existing_title = item["snippet"].get("title", "")
+                if existing_title == clip_title:
+                    video_id = item["snippet"]["resourceId"]["videoId"]
+                    log.info("Duplicate found on channel: '%s' -> %s", clip_title, video_id)
+                    return video_id
+            checked += len(pl_resp.get("items", []))
+            page_token = pl_resp.get("nextPageToken")
+            if not page_token:
+                break
+        return None
+    except HttpError as e:
+        log.warning("Channel duplicate check failed (HTTP %s): %s", e.resp.status, e)
+        return None
+    except Exception:
+        log.warning("Channel duplicate check failed", exc_info=True)
         return None
 
 

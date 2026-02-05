@@ -40,12 +40,24 @@ jobs:
           printf '%s' "$YOUTUBE_TOKEN_THEBURNTPEANUT" | base64 -d > credentials/theburntpeanut_youtube.json
 
       - name: Restore database
+        id: db-cache
         uses: actions/cache/restore@v4
         with:
           path: data/clips.db
           key: clips-db-v1
           restore-keys: |
             clips-db-
+
+      - name: Restore database from artifact (fallback)
+        if: steps.db-cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Cache miss — attempting artifact fallback"
+          mkdir -p data
+          gh run download --name clips-db --dir data/ 2>/dev/null && \
+            echo "Restored DB from artifact" || \
+            echo "::warning::No artifact found — starting with empty DB"
 
       - name: Run pipeline
         env:
@@ -59,7 +71,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          base64 -w0 credentials/theburntpeanut_youtube.json | gh secret set YOUTUBE_TOKEN_THEBURNTPEANUT --body -
+          if [ -s credentials/theburntpeanut_youtube.json ]; then
+            base64 -w0 credentials/theburntpeanut_youtube.json | gh secret set YOUTUBE_TOKEN_THEBURNTPEANUT --body -
+          else
+            echo "::warning::Token file missing or empty — skipping secret save to prevent corruption"
+          fi
 
       - name: Checkpoint WAL before cache save
         if: success()

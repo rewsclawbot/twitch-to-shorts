@@ -20,8 +20,10 @@ from src.video_processor import crop_to_vertical, extract_thumbnail
 from src.youtube_uploader import (
     get_authenticated_service,
     upload_short,
+    build_upload_title,
     verify_upload,
     set_thumbnail,
+    check_channel_for_duplicate,
     QuotaExhaustedError,
 )
 from src.youtube_analytics import get_analytics_service, fetch_video_metrics
@@ -382,6 +384,16 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
                 total_uploaded += 1
                 continue
 
+            # Defense-in-depth: check YouTube channel for existing upload with same title
+            planned_title = build_upload_title(clip, title_template, title_templates)
+            existing_yt_id = check_channel_for_duplicate(yt_service, planned_title)
+            if existing_yt_id:
+                log.warning("Clip %s already on channel as %s — recording and skipping", clip.id, existing_yt_id)
+                clip.youtube_id = existing_yt_id
+                insert_clip(conn, clip)
+                _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
+                continue
+
             try:
                 youtube_id = upload_short(yt_service, vertical_path, clip,
                                          category_id=streamer.category_id,
@@ -407,12 +419,16 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
                     break
                 continue
 
+            # Record to DB immediately after upload succeeds — before verify/thumbnail.
+            # A phantom DB entry is trivially cleanable; a duplicate upload is not.
+            consecutive_403s = 0
+            clip.youtube_id = youtube_id
+            insert_clip(conn, clip)
+            total_uploaded += 1
+            log.info("Uploaded clip %s -> YouTube %s", clip.id, youtube_id)
+
             if not verify_upload(yt_service, youtube_id):
-                log.warning("Upload verification failed for clip %s (yt=%s), skipping DB insert", clip.id, youtube_id)
-                increment_fail_count(conn, clip)
-                total_failed += 1
-                _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
-                continue
+                log.warning("Upload verification failed for clip %s (yt=%s) — already recorded in DB", clip.id, youtube_id)
 
             if thumbnail_enabled:
                 thumbnail_path = extract_thumbnail(
@@ -423,12 +439,6 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
                 )
                 if thumbnail_path:
                     set_thumbnail(yt_service, youtube_id, thumbnail_path)
-
-            consecutive_403s = 0
-            clip.youtube_id = youtube_id
-            insert_clip(conn, clip)
-            total_uploaded += 1
-            log.info("Uploaded clip %s -> YouTube %s", clip.id, youtube_id)
 
             _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
 
