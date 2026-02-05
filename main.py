@@ -276,6 +276,16 @@ def _process_single_clip(clip, yt_service, conn, cfg, streamer, log, dry_run,
         "upload_fail"     - upload returned no ID
         "uploaded"        - successful upload
     """
+    # Defense-in-depth: check YouTube channel BEFORE download/process to save resources
+    if yt_service and not dry_run:
+        planned_title = build_upload_title(clip, title_template, title_templates)
+        existing_yt_id = check_channel_for_duplicate(yt_service, planned_title)
+        if existing_yt_id:
+            log.warning("Clip %s already on channel as %s — recording and skipping", clip.id, existing_yt_id)
+            clip.youtube_id = existing_yt_id
+            record_known_clip(conn, clip)
+            return "duplicate", None
+
     video_path = download_clip(clip, cfg.tmp_dir)
     if not video_path:
         increment_fail_count(conn, clip)
@@ -296,16 +306,6 @@ def _process_single_clip(clip, yt_service, conn, cfg, streamer, log, dry_run,
         log.info("[DRY RUN] Would upload clip %s: %s", clip.id, clip.title)
         _cleanup_tmp_files(video_path, vertical_path)
         return "dry_run", None
-
-    # Defense-in-depth: check YouTube channel for existing upload with same title
-    planned_title = build_upload_title(clip, title_template, title_templates)
-    existing_yt_id = check_channel_for_duplicate(yt_service, planned_title)
-    if existing_yt_id:
-        log.warning("Clip %s already on channel as %s — recording and skipping", clip.id, existing_yt_id)
-        clip.youtube_id = existing_yt_id
-        record_known_clip(conn, clip)
-        _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
-        return "duplicate", None
 
     try:
         youtube_id = upload_short(yt_service, vertical_path, clip,
@@ -461,8 +461,7 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
             processed += 1
             uploaded += 1
         elif result == "duplicate":
-            downloaded += 1
-            processed += 1
+            pass  # dedup happens before download — no resources consumed
         elif result == "quota_exhausted":
             downloaded += 1
             processed += 1

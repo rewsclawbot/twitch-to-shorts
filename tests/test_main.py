@@ -89,16 +89,20 @@ class TestProcessSingleClip:
             thumbnail_enabled=False, thumbnail_samples=8, thumbnail_width=1280,
         )
 
+    @patch("main.check_channel_for_duplicate", return_value=None)
+    @patch("main.build_upload_title", return_value="Test Title")
     @patch("main.download_clip", return_value=None)
-    def test_download_fail(self, mock_dl, clip, yt_service, conn, cfg, streamer, log):
+    def test_download_fail(self, mock_dl, mock_title, mock_dedup, clip, yt_service, conn, cfg, streamer, log):
         result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
         assert result == "downloaded_fail"
         assert yt_id is None
 
     @patch("main._cleanup_tmp_files")
+    @patch("main.check_channel_for_duplicate", return_value=None)
+    @patch("main.build_upload_title", return_value="Test Title")
     @patch("main.crop_to_vertical", return_value=None)
     @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
-    def test_process_fail(self, mock_dl, mock_crop, mock_clean, clip, yt_service, conn, cfg, streamer, log):
+    def test_process_fail(self, mock_dl, mock_crop, mock_title, mock_dedup, mock_clean, clip, yt_service, conn, cfg, streamer, log):
         result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
         assert result == "processed_fail"
         assert yt_id is None
@@ -111,12 +115,9 @@ class TestProcessSingleClip:
         assert result == "dry_run"
         assert yt_id is None
 
-    @patch("main._cleanup_tmp_files")
     @patch("main.check_channel_for_duplicate", return_value="existing_yt_id")
     @patch("main.build_upload_title", return_value="Test Title")
-    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
-    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
-    def test_duplicate_detected(self, mock_dl, mock_crop, mock_title, mock_dedup, mock_clean,
+    def test_duplicate_detected(self, mock_title, mock_dedup,
                                  clip, yt_service, conn, cfg, streamer, log):
         result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
         assert result == "duplicate"

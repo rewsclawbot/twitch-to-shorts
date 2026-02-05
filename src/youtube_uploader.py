@@ -363,6 +363,19 @@ def check_channel_for_duplicate(service, clip_title: str, max_results: int = 50)
                 existing_title = item["snippet"].get("title", "")
                 if existing_title == clip_title:
                     video_id = item["snippet"]["resourceId"]["videoId"]
+                    # Verify video is actually live/processing (not a ghost from failed upload)
+                    try:
+                        v_resp = service.videos().list(part="status", id=video_id).execute()
+                        v_items = v_resp.get("items", [])
+                        if not v_items:
+                            log.info("Ghost video %s (title match but not accessible) — ignoring", video_id)
+                            continue
+                        status = v_items[0]["status"].get("uploadStatus", "")
+                        if status in ("deleted", "rejected", "failed"):
+                            log.info("Dead video %s (status=%s) — ignoring", video_id, status)
+                            continue
+                    except Exception:
+                        pass  # If verify fails, trust the match
                     log.info("Duplicate found on channel: '%s' -> %s", clip_title, video_id)
                     return video_id
             checked += len(pl_resp.get("items", []))
