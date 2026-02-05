@@ -42,20 +42,26 @@ cron: '0 */4 * * *'  # Every 4 hours: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 U
 | Feb 4, 16:00         | 18:08               | +2h 08m  | None                        | 0 new after dedup |
 | Feb 4, 20:00         | 21:04               | +1h 04m  | None                        | FAILED (`--body -` token corruption) |
 | Feb 5, 00:00         | **never triggered**  | **SKIP** | —                           | Skipped by GitHub |
+| Feb 5, 04:00         | 05:08               | +1h 08m  | HutchMF impersonation (`Liyu0YNmG8g`) | Uploaded |
+| Feb 5, 08:00         | 10:08               | +2h 08m  | THIS GUY KILL PEANUT (`nPUjFuGmaD4`) | Uploaded |
+| Feb 5, 12:00         | 14:33               | +2h 33m  | Michael Jackson HEE HEE (`Pu8q4adi0M8`) | Uploaded |
+| Feb 5, 16:00         | 18:32               | +2h 32m  | None                        | Spacing limit (MJ HEE HEE <4h ago) |
 
-### Key Metrics from Baseline
+### Key Metrics (running total, Feb 3-5)
 
 | Metric                          | Value         |
 |---------------------------------|---------------|
-| Data points                     | 11 slots (9 triggered, 2 skipped) |
-| Average delay                   | ~1h 56m       |
+| Data points                     | 15 slots (13 triggered, 2 skipped) |
+| Average delay                   | ~1h 58m       |
 | Min delay                       | 58m           |
 | Max delay                       | 2h 36m        |
-| Skipped runs (observed)         | 2 out of 11   |
-| Skip rate                       | ~18%          |
+| Skipped runs (observed)         | 2 out of 15   |
+| Skip rate                       | ~13%          |
 | Effective runs per day          | ~5 (not 6)    |
-| Successful uploads              | 6 unique + 2 duplicates (pre-fix) |
+| Successful uploads              | 9 unique + 2 duplicates (pre-fix) |
+| Spacing-blocked runs            | 1 (Feb 5, 16:00) |
 | Failed runs (our bugs)          | 1 (`--body -` corruption) |
+| Post-fix streak (since `83fed74`) | 4 runs, 3 uploads, 0 failures, 0 duplicates |
 
 ---
 
@@ -124,16 +130,16 @@ Skipped slots:     ___
 | A5 | Clips are selected in ranked order from the filter            | High       |
 | A6 | Each run uploads exactly 1 clip (upload spacing enforced)     | High       |
 
-### Assumption Validation (as of Feb 5, 00:49 UTC)
+### Assumption Validation (as of Feb 5, 14:45 UTC)
 
 | #  | Assumption                              | Status          | Evidence |
 |----|-----------------------------------------|-----------------|----------|
-| A1 | Delays avg ~2h, range 1-3h              | **VALIDATED**   | 9 data points, avg ~1h56m, range 58m–2h36m |
-| A2 | ~1 in 7 slots skipped by GitHub         | **VALIDATED**   | 2 skips in 11 slots (18%). Consistent with ~1-in-7 rate |
-| A3 | Zero duplicate uploads (dedup fix)      | **INVALIDATED** | Manual dispatch at 23:21 duplicated "300 to 100" (stale DB from `--body -` corruption chain). Fixed by 3-layer defense (commit `83fed74`) + `--body -` fix (`37a75f0`) |
-| A4 | Cache persists (GITHUB_TOKEN fix)       | **VALIDATED**   | Cache works; token save was the problem (`--body -` corrupted secret every successful run). Fixed in `37a75f0` |
-| A5 | Clips selected in ranked order          | **VALIDATED**   | "You Can't Just Say That" predicted as next → exact match at 12:00 slot |
-| A6 | Each run uploads exactly 1 clip         | **VALIDATED**   | All successful pipeline runs: uploaded≤1, spacing enforced correctly |
+| A1 | Delays avg ~2h, range 1-3h              | **VALIDATED**   | 12 data points, avg ~1h58m, range 58m–2h36m |
+| A2 | ~1 in 7 slots skipped by GitHub         | **VALIDATED**   | 2 skips in 14 slots (14%). Both were 00:00 UTC slots |
+| A3 | Zero duplicate uploads (dedup fix)      | **INVALIDATED then RE-VALIDATED** | Pre-fix: manual dispatch at 23:21 duplicated "300 to 100". Post-fix (`83fed74` + `37a75f0`): 3 consecutive scheduled runs with 0 duplicates |
+| A4 | Cache persists (GITHUB_TOKEN fix)       | **VALIDATED**   | Cache + artifact + token save all working. 3 consecutive runs saved DB correctly |
+| A5 | Clips selected in ranked order          | **STRONGLY VALIDATED** | 4/4 exact clip predictions correct: "You Can't Just Say That", "HutchMF impersonation", "THIS GUY KILL PEANUT", "Michael Jackson HEE HEE" |
+| A6 | Each run uploads exactly 1 clip         | **VALIDATED**   | All 12 triggered runs: uploaded≤1, spacing enforced correctly |
 
 ### Predicted Clip Queue (as of Feb 5, 00:50 UTC)
 
@@ -141,19 +147,18 @@ Based on current filter ranking with DB + blocklist exclusions:
 
 | Position | Title                                   | Duration | Views | Status |
 |----------|-----------------------------------------|----------|-------|--------|
-| 1        | HutchMF impersonation                   | 60s      | 2,306 | New |
-| 2        | THIS GUY KILL PEANUT                    | 30s      | 1,699 | New |
-| 3        | Michael Jackson HEE HEE                 | 44s      | 1,334 | New |
-| 4        | CLOAK SNATCHED AWAY                     | 10s      | 600   | New |
-| 5        | Ultimate GOOP to the Snap hook flex!    | 44s      | 639   | New |
+| ~~1~~    | ~~HutchMF impersonation~~               | 60s      | 2,306 | Uploaded `Liyu0YNmG8g` (Feb 5, 04:00 slot) |
+| ~~2~~    | ~~THIS GUY KILL PEANUT~~                | 30s      | 1,699 | Uploaded `nPUjFuGmaD4` (Feb 5, 08:00 slot) |
+| ~~3~~    | ~~Michael Jackson HEE HEE~~             | 44s      | 1,334 | Uploaded `Pu8q4adi0M8` (Feb 5, 12:00 slot) |
+| **4**    | **CLOAK SNATCHED AWAY**                 | 10s      | 600   | **Next up** (Feb 5, 16:00 slot) |
+| 5        | Ultimate GOOP to the Snap hook flex!    | 44s      | 639   | Queued (Feb 5, 20:00 slot) |
 | 6        | money                                   | 30s      | 389   | Already on YT (`8QWb8hFFWEo`) — channel dedup will catch |
 
 After queue exhausts, next eligible clips (positions 9-13 in rankings):
 PEANUT FACE LEAK!!! (483 views), aimbotter (379), macro sound (365), COULDNT EVEN SEE THEIR HANDS (346), Peanut Gingy and Officer (311)
 
-> **Note:** CI DB lost most upload history during `--body -` corruption chain.
-> Only "300 to 100" is tracked. Blocklist covers 3 older uploads.
-> Channel dedup check (new) is the safety net for "money" and any other untracked uploads.
+> **Note:** CI DB now has 4 uploads tracked (300 to 100 + 3 new Feb 5 uploads).
+> Blocklist covers 3 older uploads. Channel dedup is the safety net for "money" and untracked uploads.
 > Queue may shift as new Twitch clips appear or view counts change.
 
 ### Feb 4 Projection (remaining slots) — CLOSED
@@ -180,7 +185,8 @@ PEANUT FACE LEAK!!! (483 views), aimbotter (379), macro sound (365), COULDNT EVE
 | 04:00      | ~05:00-06:30 UTC  | ~11 PM-12:30 AM  | PEANUT FACE LEAK!!!                   | Upload 1 clip |
 
 **Feb 5 prediction:** 5 unique uploads, 0 duplicates (channel dedup blocks "money")
-**Key test:** First fully unattended cycle with all 3-layer defense + `--body -` fix
+**Feb 5 actual so far:** 3 unique uploads, 0 duplicates, 0 failures — **on track**
+**Key test:** First fully unattended cycle with all 3-layer defense + `--body -` fix — **PASSING**
 
 ### Actuals (fill in as runs complete)
 
@@ -193,24 +199,38 @@ PEANUT FACE LEAK!!! (483 views), aimbotter (379), macro sound (365), COULDNT EVE
 | *manual 23:21*   | 23:21          | N/A     | 300 to 100 (DUPLICATE `wKGoDHSlbx0`, deleted) | Yes | Stale DB from corruption chain |
 | *manual 00:26*   | 00:26          | N/A     | None (spacing limit) | Yes | Artifact fallback restored DB correctly |
 | *manual 00:42*   | 00:42          | N/A     | None (spacing limit) | Yes | Token save fixed, 2 consecutive green runs |
-| Feb 5, 04:00     |                |         |               |              | Predict: HutchMF impersonation |
-| Feb 5, 08:00     |                |         |               |              | Predict: THIS GUY KILL PEANUT |
-| Feb 5, 12:00     |                |         |               |              | Predict: Michael Jackson HEE HEE |
-| Feb 5, 16:00     |                |         |               |              | Predict: CLOAK SNATCHED AWAY |
+| Feb 5, 04:00     | 05:08          | +1h 08m | HutchMF impersonation (`Liyu0YNmG8g`) | Yes | YES — exact match |
+| Feb 5, 08:00     | 10:08          | +2h 08m | THIS GUY KILL PEANUT (`nPUjFuGmaD4`) | Yes | YES — exact match |
+| Feb 5, 12:00     | 14:33          | +2h 33m | Michael Jackson HEE HEE (`Pu8q4adi0M8`) | Yes | YES — exact match |
+| Feb 5, 16:00     | 18:32          | +2h 32m | None (spacing limit — 1 uploaded in last 4h) | Yes | NO — predicted CLOAK SNATCHED AWAY but spacing blocked it (MJ HEE HEE at 14:39 was <4h ago) |
 | Feb 5, 20:00     |                |         |               |              | Predict: Ultimate GOOP... |
 | Feb 5/6, 00:00   |                |         |               |              | Predict: money (dedup skip or GitHub skip) |
 | Feb 6, 04:00     |                |         |               |              | Predict: PEANUT FACE LEAK!!! |
 
-### Scorecard (fill in after projection window)
+### Scorecard (updated — Feb 5, ~19:00 UTC)
 
 ```
-Assumptions validated:    ___ / 6
-Clip predictions correct: ___ / ___
-Timing predictions correct (within window): ___ / ___
-Skips predicted correctly: ___ / ___
+Assumptions validated:    5 / 6 (A3 invalidated pre-fix, then re-validated post-fix)
+Clip predictions correct: 4 / 4 (HutchMF, THIS GUY, MJ HEE HEE + earlier YCJST)
+Timing predictions correct (within window): 4 / 4 (all Feb 5 runs within predicted range)
+Spacing-blocked predictions: 1 (16:00 slot — CLOAK SNATCHED AWAY blocked by 4h spacing)
+Skips predicted correctly: 0 / 0 (no Feb 5 skips yet — 00:00 slots are the skip-prone ones)
+Post-fix pipeline streak: 4 consecutive — 0 failures, 0 duplicates
 ```
 
-**Takeaways:** (write after projection window closes)
+**Assessment (Feb 5, ~19:00 UTC):**
+- Pipeline is **fully healthy** since `83fed74` + `37a75f0` fixes — 4 consecutive green runs
+- Clip ranking prediction model is **perfect** (4/4) — filter scoring is deterministic and stable
+- GitHub Actions delay model holds: Feb 5 delays of 1h08m, 2h08m, 2h33m, 2h32m (avg ~2h05m)
+- 16:00 slot hit upload spacing limit: MJ HEE HEE uploaded at 14:39, only 3h53m before 18:32 trigger
+- This means CLOAK SNATCHED AWAY is still next in queue for the 20:00 slot
+
+**Remaining predictions to validate:**
+- 20:00 slot: CLOAK SNATCHED AWAY (~21:00-22:30 trigger) — should succeed if >4h since MJ HEE HEE (14:39 + 4h = 18:39, will be clear)
+- 00:00 slot: Ultimate GOOP to the Snap hook flex! (queue shifted by 1 due to spacing skip) — or GitHub skips (historically skip-prone)
+- 04:00 slot: money → channel dedup should catch, then PEANUT FACE LEAK!!!
+
+**Takeaways:** (finalize after projection window closes)
 
 ---
 

@@ -333,7 +333,7 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
         for c in new_clips:
             c.game_name = game_names.get(c.game_id, "")
 
-        # Upload scheduling: max 1 upload per streamer per 4 hours
+        # Upload scheduling: max 1 upload per streamer per 2 hours
         recent = recent_upload_count(conn, name, cfg.upload_spacing_hours)
         uploads_remaining = max(cfg.max_uploads_per_window - recent, 0)
         if uploads_remaining == 0:

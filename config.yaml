@@ -54,7 +54,7 @@ pipeline:
   tmp_dir: "data/tmp"
   db_path: "data/clips.db"
   log_file: "data/pipeline.log"
-  upload_spacing_hours: 4
+  upload_spacing_hours: 2
   max_uploads_per_window: 1
   # Analytics sync (optional)
   analytics_enabled: false

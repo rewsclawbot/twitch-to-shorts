@@ -140,3 +140,9 @@
 - The `--body -` bug was present from the start but masked: we'd manually re-set secrets, the next run would succeed, its token save would corrupt the secret, and the following run would fail. We blamed "secret corruption" without realizing the pipeline itself was the corruption source.
 - Two consecutive successful runs is the minimum bar for proving a CI secret round-trips correctly. One success proves nothing — it might be consuming a manually-set good value while writing back garbage.
 - **Rule**: After fixing any CI secret handling, trigger two back-to-back runs. If the second one fails at credential restore, the save step is corrupting the secret.
+
+## 2026-02-05 — Upload Spacing vs Cron Interval
+
+### Spacing thresholds must account for execution delay variance
+- `upload_spacing_hours: 4` matched the cron interval (every 4h), leaving zero tolerance for GitHub Actions delay variance. Delays range 58m–2h36m, so the worst-case wall-clock gap between consecutive slots is `4h - (max_delay - min_delay)` = ~2h22m. A 4h spacing check on actual upload times (`posted_at`) blocked valid cron slots whenever `slot_B_delay < slot_A_delay`.
+- **Rule**: `upload_spacing_hours` must be strictly less than `cron_interval - max_delay_variance`. With 4h cron and ~1h38m observed variance, 2h gives safe margin. The cron schedule + `max_uploads_per_window` are the primary rate limiters — spacing is just a safety net against rapid-fire manual runs.
