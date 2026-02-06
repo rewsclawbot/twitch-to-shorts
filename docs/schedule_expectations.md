@@ -136,23 +136,6 @@ Use this data to establish baselines and spot regressions.
 
 ---
 
-## Known Failure Modes (Resolved)
-
-These are bugs we've already fixed. If symptoms recur, check for regressions.
-
-| Symptom | Root Cause | Fix | Commit |
-|---------|-----------|-----|--------|
-| All uploads fail with `RedirectMissingLocation` | `build(http=AuthorizedHttp)` breaks YouTube 308 resume protocol | Use `build(credentials=creds)` | `4e433b2` |
-| `--body -` corrupts token every successful run | `gh secret set --body -` sets literal `"-"`, not stdin | Omit `--body` flag | `37a75f0` |
-| `no such column: channel_key` crash | Cached DB missing column | Schema migration adds column if missing | `0beefc4` |
-| DB overwritten on failed runs → duplicate uploads | `if: always()` on DB cache save | DB save uses `if: success()` | `b6700a2` |
-| Top clip is duplicate, upload slot wasted | `new_clips[:uploads_remaining]` pre-cap | Removed pre-cap, loop handles limit | `f15e9b6` |
-| Same clip uploaded 3x | No DB persistence between runs (static cache key) | Dynamic cache key + blocklist | early Feb 3 |
-| Zombie "processing" videos block future uploads | Failed mid-upload creates YouTube entries | Manual delete + DB wipe | manual Feb 6 |
-| Clip pool exhaustion (only 14 clips at 300 min views) | `min_view_count` too high | Lowered to 50, pool now 78 | `24e7fab` |
-
----
-
 ## How to Update This Document
 
 After observing new runs, add rows to the Historical Actuals section:
