@@ -125,6 +125,7 @@ Use this data to establish baselines and spot regressions.
 | Feb 5, 16:00 | 18:32 | +2h 32m | Spacing limit (MJ HEE HEE <4h ago) |
 | Feb 5, 20:00 | 21:03 | +1h 03m | FAILED: `channel_key` migration crash |
 | Feb 6, 00:17 | — | SKIP | Skipped by GitHub (3/3 midnight slots skipped) |
+| Feb 6, 04:17 | 07:31 | +3h 14m | Uploaded: GOOD! -Hutch (1st clip CPU timeout, fell through to 2nd) |
 
 **Baseline metrics (18 cron slots observed):**
 - Average delay: ~1h 55m

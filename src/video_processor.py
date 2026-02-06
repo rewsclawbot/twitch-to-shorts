@@ -389,7 +389,11 @@ def _run_ffmpeg(input_path: str, output_path: str, vf: str,
     if gpu:
         cmd += ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"]
     else:
-        cmd += ["-c:v", "libx264", "-crf", "20", "-preset", "medium"]
+        # Use a faster CPU preset on CI to reduce timeouts.
+        ci_env = os.environ.get("CI", "").lower() in ("1", "true", "yes")
+        disable_gpu = os.environ.get("DISABLE_GPU_ENCODE", "").lower() in ("1", "true", "yes")
+        cpu_preset = "fast" if (ci_env or disable_gpu) else "medium"
+        cmd += ["-c:v", "libx264", "-crf", "20", "-preset", cpu_preset]
 
     # Two-pass loudnorm: use measured stats if available, else fall back to single-pass
     if loudness:
