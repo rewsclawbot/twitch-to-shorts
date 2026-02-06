@@ -24,6 +24,7 @@ from src.youtube_uploader import (
     verify_upload,
     set_thumbnail,
     check_channel_for_duplicate,
+    AuthenticationError,
     ForbiddenError,
     QuotaExhaustedError,
 )
@@ -273,6 +274,7 @@ def _process_single_clip(clip, yt_service, conn, cfg, streamer, log, dry_run,
         "duplicate"       - already on channel
         "quota_exhausted" - YouTube quota hit
         "forbidden"       - 403 from YouTube
+        "auth_error"      - authentication/credential failure
         "upload_fail"     - upload returned no ID
         "uploaded"        - successful upload
     """
@@ -324,6 +326,10 @@ def _process_single_clip(clip, yt_service, conn, cfg, streamer, log, dry_run,
         increment_fail_count(conn, clip)
         _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
         return "forbidden", None
+    except AuthenticationError:
+        log.error("Authentication failed — aborting uploads for this streamer")
+        _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
+        return "auth_error", None
 
     if not youtube_id:
         increment_fail_count(conn, clip)
@@ -466,6 +472,11 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
             downloaded += 1
             processed += 1
             quota_exhausted = True
+            break
+        elif result == "auth_error":
+            downloaded += 1
+            processed += 1
+            failed += 1
             break
         elif result == "forbidden":
             downloaded += 1

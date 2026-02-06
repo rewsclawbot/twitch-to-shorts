@@ -12,7 +12,7 @@ import pytest
 
 from src.db import init_schema, insert_clip, recent_upload_count
 from src.models import Clip, StreamerConfig, PipelineConfig, FacecamConfig
-from src.youtube_uploader import QuotaExhaustedError, ForbiddenError
+from src.youtube_uploader import AuthenticationError, QuotaExhaustedError, ForbiddenError
 from main import (
     _process_single_clip,
     _process_streamer,
@@ -144,6 +144,18 @@ class TestProcessSingleClip:
                         mock_clean, clip, yt_service, conn, cfg, streamer, log):
         result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
         assert result == "forbidden"
+
+    @patch("main._cleanup_tmp_files")
+    @patch("main.upload_short", side_effect=AuthenticationError("RedirectMissingLocation"))
+    @patch("main.check_channel_for_duplicate", return_value=None)
+    @patch("main.build_upload_title", return_value="Test Title")
+    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    def test_auth_error(self, mock_dl, mock_crop, mock_title, mock_dedup, mock_upload,
+                         mock_clean, clip, yt_service, conn, cfg, streamer, log):
+        result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
+        assert result == "auth_error"
+        assert yt_id is None
 
     @patch("main._cleanup_tmp_files")
     @patch("main.upload_short", return_value=None)
@@ -312,6 +324,47 @@ class TestProcessStreamer:
         assert quota_exhausted is True
         assert uploaded == 1
         assert mock_process.call_count == 2
+
+    @patch("main.update_streamer_stats")
+    @patch("main._process_single_clip")
+    @patch("main.get_authenticated_service", return_value=MagicMock())
+    @patch("main.recent_upload_count", return_value=0)
+    @patch("main.filter_new_clips")
+    @patch("main.filter_and_rank")
+    def test_auth_error_breaks_loop(self, mock_rank, mock_dedup, mock_recent,
+                                     mock_auth, mock_process, mock_stats,
+                                     conn, cfg, streamer, log):
+        """Auth error on first clip should stop processing remaining clips."""
+        cfg.max_clips_per_streamer = 5
+        cfg.max_uploads_per_window = 5
+        clips = [
+            Clip(id=f"c{i}", url="u", title="T", view_count=100,
+                 created_at="2026-01-15T12:00:00Z", duration=30, streamer="teststreamer")
+            for i in range(5)
+        ]
+
+        twitch = MagicMock()
+        twitch.fetch_clips.return_value = clips
+        twitch.get_game_names.return_value = {}
+        mock_rank.return_value = clips
+        mock_dedup.return_value = clips
+
+        mock_process.side_effect = [
+            ("auth_error", None),
+            ("uploaded", "yt_1"),  # Should never be reached
+            ("uploaded", "yt_2"),
+        ]
+
+        result = _process_streamer(
+            streamer, twitch, cfg, conn, log, False,
+            "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
+        )
+        _, _, downloaded, processed, uploaded, failed, _ = result
+        assert mock_process.call_count == 1  # Only 1 clip attempted
+        assert downloaded == 1
+        assert processed == 1
+        assert failed == 1
+        assert uploaded == 0
 
     @patch("main.update_streamer_stats")
     @patch("main._process_single_clip")

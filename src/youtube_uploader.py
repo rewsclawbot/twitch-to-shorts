@@ -43,6 +43,10 @@ class ForbiddenError(Exception):
     """Raised when YouTube API returns 403 for an upload."""
 
 
+class AuthenticationError(Exception):
+    """Raised when YouTube API returns an authentication/credential error during upload."""
+
+
 def _extract_error_reason(err: HttpError) -> str:
     if isinstance(err.error_details, list):
         for detail in err.error_details:
@@ -321,6 +325,9 @@ def upload_short(
             raise ForbiddenError(reason or "unknown") from e
         log.exception("Upload failed for %s (status=%s reason=%s)", full_title, e.resp.status, reason or "unknown")
         return None
+    except (httplib2.error.RedirectMissingLocation, RefreshError) as e:
+        log.error("Authentication error during upload for %s: %s", full_title, e)
+        raise AuthenticationError(str(e)) from e
     except Exception:
         log.exception("Upload failed for %s", full_title)
         return None
