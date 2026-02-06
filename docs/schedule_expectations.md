@@ -106,33 +106,35 @@ Use this data to establish baselines and spot regressions.
 
 ### Feb 3-6, 2026 (initial launch period)
 
-| Scheduled Slot (UTC) | Actual Trigger (UTC) | Delay    | Result |
-|----------------------|---------------------|----------|--------|
-| Feb 3, 08:00         | 10:04               | +2h 04m  | Uploaded: When You Flex on the Nut |
-| Feb 3, 12:00         | 14:31               | +2h 31m  | Duplicate (cache bug, pre-fix) |
-| Feb 3, 16:00         | 18:36               | +2h 36m  | Duplicate (cache bug, pre-fix) |
-| Feb 3, 20:00         | 21:50               | +1h 50m  | Uploaded: PEANUT FLYS AWAY! |
-| Feb 4, 00:00         | never triggered      | SKIP     | Skipped by GitHub |
-| Feb 4, 04:00         | 04:58               | +0h 58m  | Uploaded: money |
-| Feb 4, 08:00         | 10:08               | +2h 08m  | Uploaded: 300 to 100 |
-| Feb 4, 12:00         | 14:28               | +2h 28m  | Uploaded: You Can't Just Say That |
-| Feb 4, 16:00         | 18:08               | +2h 08m  | 0 new after dedup |
-| Feb 4, 20:00         | 21:04               | +1h 04m  | FAILED: `--body -` token corruption |
-| Feb 5, 00:00         | never triggered      | SKIP     | Skipped by GitHub |
-| Feb 5, 04:00         | 05:08               | +1h 08m  | Uploaded: HutchMF impersonation |
-| Feb 5, 08:00         | 10:08               | +2h 08m  | Uploaded: THIS GUY KILL PEANUT |
-| Feb 5, 12:00         | 14:33               | +2h 33m  | Uploaded: Michael Jackson HEE HEE |
-| Feb 5, 16:00         | 18:32               | +2h 32m  | Spacing limit (MJ HEE HEE <4h ago) |
-| Feb 5, 20:00         | 21:03               | +1h 03m  | FAILED: `channel_key` migration crash |
-| Feb 6, 00:17         | never triggered      | SKIP     | Skipped by GitHub (3/3 midnight slots skipped) |
+| Slot (UTC) | Trigger | Actual (UTC) | Result |
+|------------|---------|-------------|--------|
+| Feb 3, 08:00 | cron | 10:04 | Uploaded: When You Flex on the Nut |
+| Feb 3, 12:00 | cron | 14:31 | Duplicate (cache bug, pre-fix) |
+| Feb 3, 16:00 | cron | 18:36 | Duplicate (cache bug, pre-fix) |
+| Feb 3, 20:00 | cron | 21:50 | Uploaded: PEANUT FLYS AWAY! |
+| Feb 4, 00:00 | cron | — | Skipped by GitHub |
+| Feb 4, 04:00 | cron | 04:58 | Uploaded: money |
+| Feb 4, 08:00 | cron | 10:08 | Uploaded: 300 to 100 |
+| Feb 4, 12:00 | cron | 14:28 | Uploaded: You Can't Just Say That |
+| Feb 4, 16:00 | cron | 18:08 | 0 new after dedup |
+| Feb 4, 20:00 | cron | 21:04 | FAILED: `--body -` token corruption |
+| Feb 5, 00:00 | cron | — | Skipped by GitHub |
+| Feb 5, 04:00 | cron | 05:08 | Uploaded: HutchMF impersonation (`Liyu0YNmG8g`) |
+| Feb 5, 08:00 | cron | 10:08 | Uploaded: THIS GUY KILL PEANUT (`nPUjFuGmaD4`) |
+| Feb 5, 12:00 | cron | 14:33 | Uploaded: Michael Jackson HEE HEE (`Pu8q4adi0M8`) |
+| Feb 5, 16:00 | cron | 18:32 | Spacing limit (MJ HEE HEE <4h ago) |
+| Feb 5, 20:00 | cron | 21:03 | FAILED: `channel_key` migration crash |
+| — | manual | 22:20 | FAILED: 5 zombie uploads (`RedirectMissingLocation`). Videos created on YouTube but stuck "processing". Deleted manually. Clips: GOOD! -Hutch, PEANUT FACE LEAK!!!, aimbotter, Peanut gets stepped on, COULDNT EVEN SEE THEIR HANDS |
+| Feb 6, 00:17 | cron | — | Skipped by GitHub (3/3 midnight slots skipped) |
+| — | manual | 03:08 | Uploaded: macro sound (`xoy21lFVK2c`). First upload after `RedirectMissingLocation` fix + DB wipe |
 
-**Baseline metrics (18 slots observed):**
-- Average delay: ~1h 55m
+**Baseline metrics (18 cron slots observed):**
+- Average cron delay: ~1h 55m
 - Delay range: 58m to 2h 36m
 - Midnight skip rate: 100% (3/3)
 - Non-midnight skip rate: 0%
-- Effective runs/day: ~5
-- Upload success rate (when triggered, excluding known-fixed bugs): ~70%
+- Effective cron runs/day: ~5
+- Total YouTube uploads: 11 (9 cron + 1 manual + 2 duplicates pre-fix, minus 5 zombies deleted)
 
 ---
 
