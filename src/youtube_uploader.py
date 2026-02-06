@@ -8,7 +8,6 @@ import sys
 import time
 
 import httplib2
-import google_auth_httplib2
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.exceptions import RefreshError
@@ -115,10 +114,7 @@ def get_credentials(client_secrets_file: str, credentials_file: str) -> Credenti
 def get_authenticated_service(client_secrets_file: str, credentials_file: str):
     """Get an authenticated YouTube Data API service."""
     creds = get_credentials(client_secrets_file, credentials_file)
-    authorized_http = google_auth_httplib2.AuthorizedHttp(
-        creds, http=httplib2.Http(timeout=30)
-    )
-    return build("youtube", "v3", http=authorized_http)
+    return build("youtube", "v3", credentials=creds)
 
 
 def _truncate_title(title: str, max_len: int = 100) -> str:

@@ -1,8 +1,6 @@
 import logging
 from datetime import datetime, timezone
 
-import httplib2
-import google_auth_httplib2
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
@@ -19,10 +17,7 @@ _METRICS_FALLBACK = "views,estimatedMinutesWatched,averageViewDuration,averageVi
 
 def get_analytics_service(client_secrets_file: str, credentials_file: str):
     creds = get_credentials(client_secrets_file, credentials_file)
-    authorized_http = google_auth_httplib2.AuthorizedHttp(
-        creds, http=httplib2.Http(timeout=30)
-    )
-    return build("youtubeAnalytics", "v2", http=authorized_http)
+    return build("youtubeAnalytics", "v2", credentials=creds)
 
 
 def _query_metrics(service, video_id: str, start_date: str, end_date: str, metrics: str) -> dict:
