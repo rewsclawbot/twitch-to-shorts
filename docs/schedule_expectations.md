@@ -27,7 +27,7 @@ cron: '0 */4 * * *'  # Every 4 hours: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 U
 
 ## Observed Behavior (Baseline Data)
 
-### Run History: Feb 3-5, 2026
+### Run History: Feb 3-6, 2026
 
 | Scheduled Slot (UTC) | Actual Trigger (UTC) | Delay    | Clip Uploaded               | Result    |
 |----------------------|---------------------|----------|-----------------------------|-----------|
@@ -46,22 +46,26 @@ cron: '0 */4 * * *'  # Every 4 hours: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 U
 | Feb 5, 08:00         | 10:08               | +2h 08m  | THIS GUY KILL PEANUT (`nPUjFuGmaD4`) | Uploaded |
 | Feb 5, 12:00         | 14:33               | +2h 33m  | Michael Jackson HEE HEE (`Pu8q4adi0M8`) | Uploaded |
 | Feb 5, 16:00         | 18:32               | +2h 32m  | None                        | Spacing limit (MJ HEE HEE <4h ago) |
+| Feb 5, 20:00         | 21:03               | +1h 03m  | None                        | FAILED (`channel_key` migration crash — pre-fix code) |
+| *manual 22:20*       | 22:20               | N/A      | 5 clips attempted           | FAILED (all 5 uploads auth error — stale token from crash) |
+| *manual 23:45-47*    | 23:45               | N/A      | Dry runs                    | Success (testing infra changes) |
+| Feb 5/6, 00:00       |                      |          |                             | Pending — historically skip-prone (2/2 skipped) |
 
-### Key Metrics (running total, Feb 3-5)
+### Key Metrics (running total, Feb 3-6)
 
 | Metric                          | Value         |
 |---------------------------------|---------------|
-| Data points                     | 15 slots (13 triggered, 2 skipped) |
-| Average delay                   | ~1h 58m       |
+| Data points                     | 17 slots (15 triggered, 2 skipped) + 1 pending |
+| Average delay                   | ~1h 55m       |
 | Min delay                       | 58m           |
 | Max delay                       | 2h 36m        |
-| Skipped runs (observed)         | 2 out of 15   |
+| Skipped runs (observed)         | 2 out of 17 (both 00:00 UTC slots) + 1 pending |
 | Skip rate                       | ~13%          |
 | Effective runs per day          | ~5 (not 6)    |
 | Successful uploads              | 9 unique + 2 duplicates (pre-fix) |
 | Spacing-blocked runs            | 1 (Feb 5, 16:00) |
-| Failed runs (our bugs)          | 1 (`--body -` corruption) |
-| Post-fix streak (since `83fed74`) | 4 runs, 3 uploads, 0 failures, 0 duplicates |
+| Failed runs (our bugs)          | 2 (`--body -` corruption + `channel_key` migration) |
+| Post-fix streak (since `83fed74`) | 4 scheduled, then broken by `channel_key` crash (pre-fix code) |
 
 ---
 
@@ -203,34 +207,42 @@ PEANUT FACE LEAK!!! (483 views), aimbotter (379), macro sound (365), COULDNT EVE
 | Feb 5, 08:00     | 10:08          | +2h 08m | THIS GUY KILL PEANUT (`nPUjFuGmaD4`) | Yes | YES — exact match |
 | Feb 5, 12:00     | 14:33          | +2h 33m | Michael Jackson HEE HEE (`Pu8q4adi0M8`) | Yes | YES — exact match |
 | Feb 5, 16:00     | 18:32          | +2h 32m | None (spacing limit — 1 uploaded in last 4h) | Yes | NO — predicted CLOAK SNATCHED AWAY but spacing blocked it (MJ HEE HEE at 14:33 was <4h ago) |
-| Feb 5, 20:00     |                |         |               |              | Predict: CLOAK SNATCHED AWAY (bumped from 16:00, spacing clear) |
-| Feb 5/6, 00:00   |                |         |               |              | Predict: Ultimate GOOP... (or GitHub skips slot) |
-| Feb 6, 04:00     |                |         |               |              | Predict: money (dedup) → PEANUT FACE LEAK!!! |
+| Feb 5, 20:00     | 21:03          | +1h 03m | None          | N/A          | NO — FAILED `channel_key` migration crash (ran on pre-fix code) |
+| *manual 22:20*   | 22:20          | N/A     | 0/5 (all auth fail) | Yes    | Auth failures — stale token from crash chain |
+| Feb 5/6, 00:00   |                |          |              |              | Pending — expect trigger ~01:00-02:30 or skip |
+| Feb 6, 04:00     |                |         |               |              | Predict: CLOAK SNATCHED AWAY (bumped from failed 20:00) |
+| Feb 6, 08:00     |                |         |               |              | Predict: Ultimate GOOP to the Snap hook flex! |
+| Feb 6, 12:00     |                |         |               |              | Predict: money → channel dedup → PEANUT FACE LEAK!!! |
 
-### Scorecard (updated — Feb 5, ~19:00 UTC)
+### Scorecard (updated — Feb 6, ~00:30 UTC)
 
 ```
 Assumptions validated:    5 / 6 (A3 invalidated pre-fix, then re-validated post-fix)
 Clip predictions correct: 4 / 4 (HutchMF, THIS GUY, MJ HEE HEE + earlier YCJST)
-Timing predictions correct (within window): 4 / 4 (all Feb 5 runs within predicted range)
-Spacing-blocked predictions: 1 (16:00 slot — CLOAK SNATCHED AWAY blocked by 4h spacing)
-Skips predicted correctly: 0 / 0 (no Feb 5 skips yet — 00:00 slots are the skip-prone ones)
-Post-fix pipeline streak: 4 consecutive — 0 failures, 0 duplicates
+Timing predictions correct (within window): 5 / 5 (all Feb 5 scheduled runs within predicted range)
+Spacing-blocked predictions: 1 (16:00 slot)
+Skips predicted correctly: 0 / 0 (Feb 5/6 00:00 still pending)
+Post-fix pipeline streak: 4 scheduled green, then broken by `channel_key` crash (pre-`0beefc4` code)
 ```
 
-**Assessment (Feb 5, ~19:00 UTC):**
-- Pipeline is **fully healthy** since `83fed74` + `37a75f0` fixes — 4 consecutive green runs
-- Clip ranking prediction model is **perfect** (4/4) — filter scoring is deterministic and stable
-- GitHub Actions delay model holds: Feb 5 delays of 1h08m, 2h08m, 2h33m, 2h32m (avg ~2h05m)
-- 16:00 slot hit upload spacing limit: MJ HEE HEE uploaded at 14:39, only 3h53m before 18:32 trigger
-- This means CLOAK SNATCHED AWAY is still next in queue for the 20:00 slot
+**Assessment (Feb 6, ~00:30 UTC):**
+- 20:00 slot failed with `channel_key` migration crash — ran on code before fix `0beefc4`
+- Manual dispatch at 22:20 also failed: 5/5 uploads got auth errors (stale token from crash chain)
+- Token re-pushed to CI secret from healthy local copy (refresh verified working)
+- 00:00 UTC slots are now 3/3 skipped by GitHub — this slot is effectively dead
+- Pipeline runtime optimizations committed (`6c8a2ae`) — first test will be Feb 6, 04:00 slot
+- Clip queue shifted: CLOAK SNATCHED AWAY bumped again (now next for 04:00 slot)
 
 **Remaining predictions to validate:**
-- 20:00 slot: CLOAK SNATCHED AWAY (~21:00-22:30 trigger) — spacing clear (MJ HEE HEE at 14:33 was 6.5h+ ago)
-- 00:00 slot: Ultimate GOOP to the Snap hook flex! — or GitHub skips (historically skip-prone, both 00:00 slots skipped so far)
-- 04:00 slot: money → channel dedup catches, fallback to PEANUT FACE LEAK!!!
+- 04:00 slot: CLOAK SNATCHED AWAY (~05:00-06:30 trigger) — first run on optimized code
+- 08:00 slot: Ultimate GOOP to the Snap hook flex!
+- 12:00 slot: money → channel dedup catches → PEANUT FACE LEAK!!!
 
-**Takeaways:** (finalize after projection window closes)
+**Takeaways:**
+- 00:00 UTC slot is unreliable (2/2 skipped so far, 3rd pending) — effective daily capacity likely 5 runs
+- `channel_key` migration fix (`0beefc4`) was committed before 20:00 trigger but GitHub ran stale code (cached checkout?)
+- Auth failures cascade: one crash can poison the token for subsequent manual runs
+- Always re-push token secret after any crash that touches credentials
 
 ---
 
@@ -245,3 +257,5 @@ Post-fix pipeline streak: 4 consecutive — 0 failures, 0 duplicates
 | Feb 4   | DB cache saved on failed runs  | Changed DB save steps to `if: success()` (`b6700a2`) |
 | Feb 5   | 3-layer upload dedup defense   | DB-before-verify + artifact fallback + channel dedup check (`83fed74`) |
 | Feb 5   | `--body -` corrupts token secret every successful run | Removed `--body` flag so `gh secret set` reads from stdin (`37a75f0`) |
+| Feb 5   | `channel_key` column missing on cached DBs | Schema migration adds column if missing (`0beefc4`) |
+| Feb 5   | Pipeline runtime: 8 ffmpeg calls for thumbnail, full audio decode for silence | Batch YDIF, `-t 6` silence limit, reorder checks, remove verify_upload (`6c8a2ae`) |
