@@ -47,7 +47,7 @@ pipeline:
   velocity_weight: 2.0
   clip_lookback_hours: 168  # 7 days
   # Scoring options (optional)
-  min_view_count: 300
+  min_view_count: 50
   age_decay: "log"  # linear | log
   view_transform: "linear"  # linear | log
   title_quality_weight: 0.05  # 0.0 disables title bonus
