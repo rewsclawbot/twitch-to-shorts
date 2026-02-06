@@ -249,6 +249,7 @@ def upload_short(
     description_template: str | None = None,
     description_templates: list[str] | None = None,
     extra_tags: list[str] | None = None,
+    prebuilt_title: str | None = None,
 ) -> str | None:
     """Upload a video as a YouTube Short. Returns the video ID on success.
 
@@ -257,7 +258,7 @@ def upload_short(
     streamer_name = clip.streamer
     game_name = clip.game_name
 
-    full_title = build_upload_title(clip, title_template, title_templates)
+    full_title = prebuilt_title if prebuilt_title is not None else build_upload_title(clip, title_template, title_templates)
 
     chosen_description = _choose_template(clip.id, description_templates) or description_template
     if chosen_description:

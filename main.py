@@ -21,7 +21,6 @@ from src.youtube_uploader import (
     get_authenticated_service,
     upload_short,
     build_upload_title,
-    verify_upload,
     set_thumbnail,
     check_channel_for_duplicate,
     AuthenticationError,
@@ -279,6 +278,7 @@ def _process_single_clip(clip, yt_service, conn, cfg, streamer, log, dry_run,
         "uploaded"        - successful upload
     """
     # Defense-in-depth: check YouTube channel BEFORE download/process to save resources
+    planned_title = None
     if yt_service and not dry_run:
         planned_title = build_upload_title(clip, title_template, title_templates)
         existing_yt_id = check_channel_for_duplicate(yt_service, planned_title)
@@ -317,7 +317,8 @@ def _process_single_clip(clip, yt_service, conn, cfg, streamer, log, dry_run,
                                   title_templates=title_templates,
                                   description_template=description_template,
                                   description_templates=description_templates,
-                                  extra_tags=(extra_tags_global or []) + (streamer.extra_tags or []))
+                                  extra_tags=(extra_tags_global or []) + (streamer.extra_tags or []),
+                                  prebuilt_title=planned_title)
     except QuotaExhaustedError:
         log.warning("YouTube quota exhausted — stopping uploads for this run")
         _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
@@ -341,9 +342,6 @@ def _process_single_clip(clip, yt_service, conn, cfg, streamer, log, dry_run,
     clip.youtube_id = youtube_id
     insert_clip(conn, clip)
     log.info("Uploaded clip %s -> YouTube %s", clip.id, youtube_id)
-
-    if not verify_upload(yt_service, youtube_id):
-        log.warning("Upload verification failed for clip %s (yt=%s) — already recorded in DB", clip.id, youtube_id)
 
     if thumbnail_enabled:
         thumbnail_path = extract_thumbnail(
@@ -415,6 +413,16 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
     if not new_clips:
         return fetched, filtered, downloaded, processed, uploaded, failed, False
 
+    # Upload scheduling: check BEFORE game name fetch to avoid wasted API calls
+    recent = recent_upload_count(conn, name, cfg.upload_spacing_hours, channel_key=channel_key)
+    uploads_remaining = max(cfg.max_uploads_per_window - recent, 0)
+    if uploads_remaining == 0:
+        log.info("Skipping uploads for %s: %d uploaded in last %dh", name, recent, cfg.upload_spacing_hours)
+        return fetched, filtered, downloaded, processed, uploaded, failed, False
+
+    # Cap to clips that will actually be processed
+    new_clips = new_clips[:uploads_remaining]
+
     game_ids = [c.game_id for c in new_clips]
     try:
         game_names = twitch.get_game_names(game_ids)
@@ -423,13 +431,6 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
         game_names = {}
     for c in new_clips:
         c.game_name = game_names.get(c.game_id, "")
-
-    # Upload scheduling: max 1 upload per streamer per 2 hours
-    recent = recent_upload_count(conn, name, cfg.upload_spacing_hours, channel_key=channel_key)
-    uploads_remaining = max(cfg.max_uploads_per_window - recent, 0)
-    if uploads_remaining == 0:
-        log.info("Skipping uploads for %s: %d uploaded in last %dh", name, recent, cfg.upload_spacing_hours)
-        return fetched, filtered, downloaded, processed, uploaded, failed, False
 
     yt_service = None
     if not dry_run:

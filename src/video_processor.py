@@ -81,18 +81,62 @@ def _sample_ydif(input_path: str, timestamp: float) -> float:
         return 0.0
 
 
+def _batch_sample_ydif(video_path: str, timestamps: list[float]) -> list[float]:
+    """Sample YDIF at multiple timestamps using a single ffmpeg filter_complex call.
+
+    Returns a list of max-YDIF values, one per timestamp (0.0 on failure).
+    """
+    if not timestamps:
+        return []
+
+    n = len(timestamps)
+    cmd = [FFMPEG]
+    for ts in timestamps:
+        cmd += ["-ss", f"{ts:.2f}", "-i", video_path]
+
+    # Each input: extract 1 frame through signalstats, then concat all
+    filters = []
+    for i in range(n):
+        filters.append(f"[{i}:v]signalstats,metadata=print,trim=end_frame=1[v{i}]")
+    concat_inputs = "".join(f"[v{i}]" for i in range(n))
+    filters.append(f"{concat_inputs}concat=n={n}:v=1:a=0[out]")
+    cmd += ["-filter_complex", ";".join(filters), "-map", "[out]", "-f", "null", "-"]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        # Parse all YDIF values from stderr
+        all_ydif: list[float] = []
+        for line in result.stderr.splitlines():
+            if "signalstats.YDIF=" in line:
+                try:
+                    all_ydif.append(float(line.split("YDIF=")[1]))
+                except (ValueError, IndexError):
+                    pass
+        # With 1 frame per input, we expect 1 YDIF per timestamp
+        # If we got fewer, pad with 0.0; if more (shouldn't happen), take first n
+        scores = []
+        for i in range(n):
+            scores.append(all_ydif[i] if i < len(all_ydif) else 0.0)
+        return scores
+    except Exception as e:
+        log.warning("Batch YDIF sampling failed: %s", e)
+        return [0.0] * n
+
+
 def extract_thumbnail(
     input_path: str,
     tmp_dir: str,
     samples: int = 8,
     width: int = 1280,
+    duration: float | None = None,
 ) -> str | None:
     """Extract a thumbnail from the most active frame in the clip."""
     os.makedirs(tmp_dir, exist_ok=True)
     clip_id = os.path.splitext(os.path.basename(input_path))[0]
     output_path = os.path.join(tmp_dir, f"{clip_id}_thumb.jpg")
 
-    duration = _get_duration(input_path)
+    if duration is None:
+        duration = _get_duration(input_path)
     if not duration or duration <= 0:
         return None
     if samples <= 0:
@@ -101,10 +145,10 @@ def extract_thumbnail(
     step = duration / (samples + 1)
     timestamps = [max(0.1, min(duration - 0.1, step * (i + 1))) for i in range(samples)]
 
+    scores = _batch_sample_ydif(input_path, timestamps)
     best_ts = timestamps[0]
     best_score = -1.0
-    for ts in timestamps:
-        score = _sample_ydif(input_path, ts)
+    for ts, score in zip(timestamps, scores):
         if score > best_score:
             best_score = score
             best_ts = ts
@@ -132,7 +176,7 @@ def extract_thumbnail(
 def _detect_leading_silence(input_path: str, threshold_db: float = -30, min_duration: float = 0.5) -> float:
     """Return duration of leading silence in seconds (0.0 if none). Capped at 5s."""
     cmd = [
-        FFMPEG, "-i", input_path,
+        FFMPEG, "-t", "6", "-i", input_path,
         "-af", f"silencedetect=noise={threshold_db}dB:d={min_duration}",
         "-vn", "-f", "null", "-",
     ]

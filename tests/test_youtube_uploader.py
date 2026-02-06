@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from tests.conftest import make_clip
@@ -8,6 +10,7 @@ from src.youtube_uploader import (
     _sanitize_text,
     _render_template,
     validate_templates,
+    upload_short,
     _VALID_TEMPLATE_KEYS,
 )
 
@@ -145,3 +148,56 @@ class TestValidateTemplates:
 
     def test_empty_list_no_error(self):
         validate_templates([])
+
+
+def _make_mock_service(video_id="vid_123"):
+    """Create a mock YouTube service that returns a successful upload."""
+    service = MagicMock()
+    insert_req = MagicMock()
+    insert_req.next_chunk.return_value = (None, {"id": video_id})
+    service.videos().insert.return_value = insert_req
+    return service
+
+
+class TestUploadShortPrebuiltTitle:
+    @patch("src.youtube_uploader.MediaFileUpload")
+    def test_prebuilt_title_used_directly(self, _mock_media):
+        """When prebuilt_title is provided, build_upload_title is NOT called."""
+        service = _make_mock_service()
+        clip = make_clip(title="Original Title", streamer="streamer1")
+
+        with patch("src.youtube_uploader.build_upload_title") as mock_build:
+            result = upload_short(
+                service, "fake_video.mp4", clip, prebuilt_title="My Custom Title"
+            )
+
+        mock_build.assert_not_called()
+        assert result == "vid_123"
+        # Verify the custom title was passed in the API body
+        body = service.videos().insert.call_args[1]["body"]
+        assert body["snippet"]["title"] == "My Custom Title"
+
+    @patch("src.youtube_uploader.MediaFileUpload")
+    def test_no_prebuilt_title_calls_build(self, _mock_media):
+        """When prebuilt_title is None, build_upload_title is called as before."""
+        service = _make_mock_service()
+        clip = make_clip(title="Original Title", streamer="streamer1")
+
+        with patch("src.youtube_uploader.build_upload_title", return_value="Built Title") as mock_build:
+            result = upload_short(service, "fake_video.mp4", clip)
+
+        mock_build.assert_called_once_with(clip, None, None)
+        assert result == "vid_123"
+        body = service.videos().insert.call_args[1]["body"]
+        assert body["snippet"]["title"] == "Built Title"
+
+    @patch("src.youtube_uploader.MediaFileUpload")
+    def test_prebuilt_title_none_falls_back(self, _mock_media):
+        """Explicitly passing prebuilt_title=None still calls build_upload_title."""
+        service = _make_mock_service()
+        clip = make_clip(title="Test", streamer="s1")
+
+        with patch("src.youtube_uploader.build_upload_title", return_value="Fallback") as mock_build:
+            upload_short(service, "fake_video.mp4", clip, prebuilt_title=None)
+
+        mock_build.assert_called_once()

@@ -169,14 +169,13 @@ class TestProcessSingleClip:
         assert result == "upload_fail"
 
     @patch("main._cleanup_tmp_files")
-    @patch("main.verify_upload", return_value=True)
     @patch("main.upload_short", return_value="yt_abc123")
     @patch("main.check_channel_for_duplicate", return_value=None)
     @patch("main.build_upload_title", return_value="Test Title")
     @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
     @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
     def test_successful_upload(self, mock_dl, mock_crop, mock_title, mock_dedup, mock_upload,
-                                mock_verify, mock_clean, clip, yt_service, conn, cfg, streamer, log):
+                                mock_clean, clip, yt_service, conn, cfg, streamer, log):
         result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
         assert result == "uploaded"
         assert yt_id == "yt_abc123"
@@ -185,17 +184,35 @@ class TestProcessSingleClip:
         assert row is not None
         assert row["youtube_id"] == "yt_abc123"
 
+    def test_verify_upload_not_in_module(self, clip, yt_service, conn, cfg, streamer, log):
+        """verify_upload() should not be imported in main.py (removed from hot path)."""
+        import main
+        assert not hasattr(main, "verify_upload"), "verify_upload should not be imported in main.py"
+
+    @patch("main._cleanup_tmp_files")
+    @patch("main.upload_short", return_value="yt_abc123")
+    @patch("main.check_channel_for_duplicate", return_value=None)
+    @patch("main.build_upload_title", return_value="Prebuilt Title")
+    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    def test_prebuilt_title_passed_to_upload(self, mock_dl, mock_crop, mock_title, mock_dedup,
+                                              mock_upload, mock_clean, clip, yt_service, conn, cfg, streamer, log):
+        """prebuilt_title from build_upload_title should be passed through to upload_short."""
+        self._call(clip, yt_service, conn, cfg, streamer, log)
+        # upload_short should receive prebuilt_title="Prebuilt Title"
+        _, kwargs = mock_upload.call_args
+        assert kwargs["prebuilt_title"] == "Prebuilt Title"
+
     @patch("main._cleanup_tmp_files")
     @patch("main.set_thumbnail", return_value=True)
     @patch("main.extract_thumbnail", return_value="/tmp/test/thumb.jpg")
-    @patch("main.verify_upload", return_value=True)
     @patch("main.upload_short", return_value="yt_abc123")
     @patch("main.check_channel_for_duplicate", return_value=None)
     @patch("main.build_upload_title", return_value="Test Title")
     @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
     @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
     def test_thumbnail_extraction_on_success(self, mock_dl, mock_crop, mock_title, mock_dedup,
-                                              mock_upload, mock_verify, mock_thumb, mock_set_thumb,
+                                              mock_upload, mock_thumb, mock_set_thumb,
                                               mock_clean, clip, yt_service, conn, cfg, streamer, log):
         result, yt_id = _process_single_clip(
             clip, yt_service, conn, cfg, streamer, log, False,
@@ -391,6 +408,67 @@ class TestProcessStreamer:
         )
         _, _, _, _, uploaded, _, _ = result
         assert uploaded == 1
+
+    @patch("main.update_streamer_stats")
+    @patch("main.recent_upload_count", return_value=0)
+    @patch("main.filter_new_clips")
+    @patch("main.filter_and_rank")
+    def test_uploads_remaining_zero_skips_game_names(self, mock_rank, mock_dedup, mock_recent,
+                                                       mock_stats, conn, cfg, streamer, log):
+        """When uploads_remaining==0, get_game_names is NOT called (API call saved)."""
+        mock_recent.return_value = 1  # At max (max_uploads_per_window=1)
+        clips = [
+            Clip(id="c1", url="u", title="T", view_count=100,
+                 created_at="2026-01-15T12:00:00Z", duration=30, streamer="teststreamer"),
+        ]
+
+        twitch = MagicMock()
+        twitch.fetch_clips.return_value = clips
+        mock_rank.return_value = clips
+        mock_dedup.return_value = clips
+
+        result = _process_streamer(
+            streamer, twitch, cfg, conn, log, False,
+            "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
+        )
+        fetched, filtered, downloaded, processed, uploaded, failed, _ = result
+        assert uploaded == 0
+        # get_game_names should NOT have been called since uploads_remaining == 0
+        twitch.get_game_names.assert_not_called()
+
+    @patch("main.update_streamer_stats")
+    @patch("main._process_single_clip")
+    @patch("main.get_authenticated_service", return_value=MagicMock())
+    @patch("main.recent_upload_count", return_value=0)
+    @patch("main.filter_new_clips")
+    @patch("main.filter_and_rank")
+    def test_clips_capped_to_uploads_remaining(self, mock_rank, mock_dedup, mock_recent,
+                                                 mock_auth, mock_process, mock_stats,
+                                                 conn, cfg, streamer, log):
+        """Clips list is capped to uploads_remaining so only processable clips get game names."""
+        cfg.max_clips_per_streamer = 5
+        cfg.max_uploads_per_window = 3
+        mock_recent.return_value = 1  # 3-1 = 2 remaining
+        clips = [
+            Clip(id=f"c{i}", url="u", title="T", view_count=100,
+                 created_at="2026-01-15T12:00:00Z", duration=30, streamer="teststreamer")
+            for i in range(5)
+        ]
+
+        twitch = MagicMock()
+        twitch.fetch_clips.return_value = clips
+        twitch.get_game_names.return_value = {}
+        mock_rank.return_value = clips
+        mock_dedup.return_value = clips
+        mock_process.return_value = ("uploaded", "yt_1")
+
+        _process_streamer(
+            streamer, twitch, cfg, conn, log, False,
+            "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
+        )
+        # Only 2 game_ids should be passed (uploads_remaining=2), not 5
+        game_ids_arg = twitch.get_game_names.call_args[0][0]
+        assert len(game_ids_arg) == 2
 
     @patch("main.update_streamer_stats")
     def test_fetch_failure_returns_zeros(self, mock_stats, conn, cfg, streamer, log):
