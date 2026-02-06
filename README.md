@@ -6,23 +6,24 @@ Automated pipeline: Twitch clips → score → dedup → download → vertical c
 
 | File | Lines | Purpose | Key Exports |
 |------|-------|---------|-------------|
-| `main.py` | 495 | Orchestration, config, locking, analytics sync | `run_pipeline()`, `load_config()`, `acquire_lock()` |
-| `src/models.py` | 61 | Dataclasses | `Clip`, `FacecamConfig`, `StreamerConfig`, `PipelineConfig` |
-| `src/twitch_client.py` | 131 | Twitch Helix API (clips, games) | `TwitchClient` |
-| `src/clip_filter.py` | 120 | Scoring + ranking | `filter_and_rank()`, `compute_score_with_options()` |
-| `src/dedup.py` | 41 | DB/overlap/blocklist dedup | `filter_new_clips()` |
-| `src/downloader.py` | 80 | yt-dlp wrapper, atomic .part→rename | `download_clip()` |
-| `src/video_processor.py` | 387 | ffmpeg: crop, facecam, loudnorm, thumbnails | `crop_to_vertical()`, `extract_thumbnail()` |
-| `src/youtube_uploader.py` | 313 | YouTube Data API v3: upload, verify, templates, tags | `upload_short()`, `verify_upload()`, `QuotaExhaustedError` |
-| `src/youtube_analytics.py` | 76 | YouTube Analytics API (dormant) | `fetch_video_metrics()` |
-| `src/db.py` | 220 | SQLite WAL, schema, migrations, metrics | `get_connection()`, `insert_clip()`, `get_streamer_performance_multiplier()` |
+| `main.py` | 610 | Orchestration, config, locking, analytics sync | `run_pipeline()`, `load_config()`, `acquire_lock()` |
+| `src/models.py` | 104 | Dataclasses, validation | `Clip`, `FacecamConfig`, `StreamerConfig`, `PipelineConfig` |
+| `src/twitch_client.py` | 140 | Twitch Helix API (clips, games) | `TwitchClient` |
+| `src/clip_filter.py` | 100 | Scoring + ranking | `filter_and_rank()`, `compute_score()` |
+| `src/dedup.py` | 64 | DB/overlap/blocklist dedup | `filter_new_clips()` |
+| `src/downloader.py` | 73 | yt-dlp wrapper, atomic .part→rename | `download_clip()` |
+| `src/video_processor.py` | 444 | ffmpeg: crop, facecam, loudnorm, thumbnails | `crop_to_vertical()`, `extract_thumbnail()` |
+| `src/media_utils.py` | 22 | Shared FFMPEG/FFPROBE constants, validation | `FFMPEG`, `FFPROBE`, `is_valid_video()` |
+| `src/youtube_uploader.py` | 427 | YouTube Data API v3: upload, templates, tags, channel dedup | `upload_short()`, `build_upload_title()`, `QuotaExhaustedError` |
+| `src/youtube_analytics.py` | 79 | YouTube Analytics API (dormant) | `fetch_video_metrics()` |
+| `src/db.py` | 269 | SQLite WAL, schema, migrations, metrics | `get_connection()`, `insert_clip()`, `get_streamer_performance_multiplier()` |
 
 ## Pipeline Data Flow
 
 1. **Fetch** — `TwitchClient.fetch_clips()` paginated Helix API, up to 500 clips per streamer within `clip_lookback_hours`
 2. **Score** — `filter_and_rank()`: view density + velocity × weight, optional log transforms, title quality bonus, performance multiplier (if analytics enabled)
 3. **Dedup** — `filter_new_clips()`: skip if already in DB (with youtube_id or fail_count≥3), in blocklist, or within 30s overlap window
-4. **Rate limit** — `recent_upload_count()`: max 1 upload per streamer per 4h window
+4. **Rate limit** — `recent_upload_count()`: max 1 upload per streamer per 2h window
 5. **Download** — `download_clip()`: yt-dlp → `.part` file → `os.replace()` atomic rename
 6. **Process** — `crop_to_vertical()`:
    - Probe dimensions, detect leading silence (trim up to 5s)
@@ -108,12 +109,12 @@ Template placeholders: `{title}`, `{streamer}`, `{game}`, `{game_name}`
 python -m pytest tests/ -v
 ```
 
-46 tests across 4 test files: `test_clip_filter.py`, `test_db.py`, `test_dedup.py`, `test_youtube_uploader.py`. Uses `conftest.py` with shared fixtures. No tests for `video_processor.py` (requires ffmpeg), `twitch_client.py` (requires network), or `main.py` (integration).
+183 tests across 8 test files. Uses `conftest.py` with shared fixtures. All modules have test coverage including `main.py`, `video_processor.py`, `twitch_client.py`, and subprocess safety tests.
 
 ## CI/CD
 
 - **Tests workflow** (`tests.yml`): on push to master + PRs. Python 3.12, `pytest tests/ -v`
-- **Pipeline workflow** (`pipeline.yml`): cron `0 */4 * * *` (every 4h) + manual dispatch
+- **Pipeline workflow** (`pipeline.yml`): cron `17 */4 * * *` (every 4h at :17) + manual dispatch
   - Concurrency group `pipeline-run`, cancel-in-progress: false
   - Secrets: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `YOUTUBE_CLIENT_SECRETS`, `YOUTUBE_TOKEN_THEBURNTPEANUT`, `GH_PAT`
   - Credentials restored from base64-encoded secrets, token re-saved after run

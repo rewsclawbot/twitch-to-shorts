@@ -128,27 +128,6 @@ These aren't bad ideas. They're just Phase 4-5 ideas being discussed at Phase 1.
 ## Capital Reality Check
 
 - **$100/mo Claude Max** is your only hard cost right now
-
----
-
-## Execution Plan
-
-### ~~Wave 5A: Audit-Critical Correctness + Security~~ DONE (2026-02-04)
-### ~~Wave 5B: Ops + Hygiene Polish~~ DONE (2026-02-04)
-### ~~Wave 6: Scoring Improvements~~ DONE (2026-02-04)
-### ~~Wave 7: YouTube Analytics Feedback Loop~~ DONE (2026-02-04, analytics dormant until Phase 2 data)
-### ~~Wave 8: Content Optimization~~ DONE (2026-02-04)
-### ~~Audit Fix Sprint~~ DONE (2026-02-05) — 28 findings fixed, 166 tests. See `docs/audit-history.md`.
-
-### Wave 9: Scale + Compilation Channels
-1. Multi-streamer onboarding workflow.
-2. Compilation channel mode for Shorts and long-form.
-3. Attribution and permission tracking.
-
-### Wave 10: Monetization + Ops
-1. Quota management across channels or API projects.
-2. Health checks and status summary output.
-3. Lightweight dashboard or export for performance tracking.
 - GitHub Actions free tier covers the pipeline (for now)
 - YouTube API is free at this scale
 - **Your most expensive resource is your time and attention.** Every hour spent building Phase 4 features is an hour not spent learning from Phase 1 data
