@@ -114,7 +114,7 @@ python -m pytest tests/ -v
 ## CI/CD
 
 - **Tests workflow** (`tests.yml`): on push to master + PRs. Python 3.12, `pytest tests/ -v`
-- **Pipeline workflow** (`pipeline.yml`): cron `17 */4 * * *` (every 4h at :17) + manual dispatch
+- **Pipeline workflow** (`pipeline.yml`): cron `17 2/4 * * *` (every 4h at :17, offset +2h) + manual dispatch
   - Concurrency group `pipeline-run`, cancel-in-progress: false
   - Secrets: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `YOUTUBE_CLIENT_SECRETS`, `YOUTUBE_TOKEN_THEBURNTPEANUT`, `GH_PAT`
   - Credentials restored from base64-encoded secrets, token re-saved after run

@@ -7,17 +7,17 @@ This document is the single source of truth for verifying the Twitch-to-Shorts p
 ## Schedule Configuration
 
 ```yaml
-cron: '17 */4 * * *'  # Every 4 hours at :17 past
+cron: '17 2/4 * * *'  # Every 4 hours at :17 past, offset +2h to avoid congested 00/04/08 slots
 ```
 
 | Slot (UTC) | Central (CST/UTC-6) |
 |------------|---------------------|
-| 00:17      | 6:17 PM             |
-| 04:17      | 10:17 PM            |
-| 08:17      | 2:17 AM             |
-| 12:17      | 6:17 AM             |
-| 16:17      | 10:17 AM            |
-| 20:17      | 2:17 PM             |
+| 02:17      | 8:17 PM             |
+| 06:17      | 12:17 AM            |
+| 10:17      | 4:17 AM             |
+| 14:17      | 8:17 AM             |
+| 18:17      | 12:17 PM            |
+| 22:17      | 4:17 PM             |
 
 **Key parameters** (from `config.yaml`):
 - `max_uploads_per_window: 1` — one upload per triggered run
@@ -27,7 +27,7 @@ cron: '17 */4 * * *'  # Every 4 hours at :17 past
 - `clip_lookback_hours: 168` — 7-day clip window
 
 **Realistic expectations:**
-- **Target: 5 uploads/day** (not 6 — the 00:17 UTC slot is historically always skipped by GitHub)
+- **Target: 6 uploads/day** (offset schedule avoids the congested 00:xx UTC slot that GitHub historically skips)
 - GitHub Actions cron delays are **1-3 hours** on average (58m min, 2h36m max observed)
 - A triggered run with `uploaded=0, failed=0` usually means upload spacing or dedup — this is normal
 
@@ -43,7 +43,7 @@ gh run list --workflow=pipeline.yml --limit 20 --json createdAt,status,conclusio
 
 ### Step 2: Map runs to scheduled slots
 
-Each run's `createdAt` timestamp should fall within 0-3 hours after one of the 6 daily slots (04:17, 08:17, 12:17, 16:17, 20:17 UTC — skip 00:17). If a slot has no run within 3 hours, GitHub skipped it.
+Each run's `createdAt` timestamp should fall within 0-3 hours after one of the 6 daily slots (02:17, 06:17, 10:17, 14:17, 18:17, 22:17 UTC). If a slot has no run within 3 hours, GitHub skipped it.
 
 ### Step 3: Check each run's result
 
@@ -61,15 +61,15 @@ Look for the `Pipeline complete` summary line:
 
 ```
 Date: ____
-Slots triggered:   ___ / 5 expected (exclude 00:17)
+Slots triggered:   ___ / 6 expected
 Successful uploads: ___
 Spacing-blocked:    ___
 Failed (our bugs):  ___
 Skipped by GitHub:  ___
 ```
 
-**On track:** 4-5 triggers, 3-5 uploads, 0 failures
-**Concerning:** <4 triggers, or any `failed=1`, or same clip uploaded twice
+**On track:** 5-6 triggers, 4-6 uploads, 0 failures
+**Concerning:** <5 triggers, or any `failed=1`, or same clip uploaded twice
 
 ---
 
@@ -91,9 +91,9 @@ Run not triggered at all?
 | Situation                              | Verdict            |
 |----------------------------------------|--------------------|
 | Run triggers 1-3h after scheduled slot | Normal (GitHub)    |
-| 00:17 UTC slot skipped                 | Normal (always skipped) |
-| Non-midnight slot skipped once         | Normal (rare but happens) |
-| 2+ non-midnight slots skipped in a row | Investigate GitHub or pushes suppressing cron |
+| A single slot skipped                  | Normal (rare but happens) |
+| Any single slot skipped once           | Normal (rare but happens) |
+| 2+ slots skipped in a row              | Investigate GitHub or pushes suppressing cron |
 | `uploaded=0, failed=0`                 | Check upload spacing/dedup — expected |
 | `uploaded=0, failed=1`                 | Our bug — check logs |
 | Same clip uploaded twice               | Dedup bug (check DB cache, channel dedup) |
@@ -126,14 +126,17 @@ Use this data to establish baselines and spot regressions.
 | Feb 5, 20:00 | 21:03 | +1h 03m | FAILED: `channel_key` migration crash |
 | Feb 6, 00:17 | — | SKIP | Skipped by GitHub (3/3 midnight slots skipped) |
 | Feb 6, 04:17 | 07:31 | +3h 14m | Uploaded: GOOD! -Hutch (1st clip CPU timeout, fell through to 2nd) |
+| Feb 6, 08:17 | 10:09 | +1h 52m | Uploaded: PEANUT FACE LEAK!!! (1st clip CPU timeout, fell through) |
+| Feb 6, 12:17 | 14:31 | +2h 14m | Uploaded: Peanut gets stepped on LOL (1st clip CPU timeout, fell through) |
+| **Schedule changed to `17 2/4` (offset +2h) after this point** | | | |
 
-**Baseline metrics (18 cron slots observed):**
-- Average delay: ~1h 55m
-- Delay range: 58m to 2h 36m
-- Midnight skip rate: 100% (3/3)
+**Baseline metrics (20 cron slots observed, pre-offset schedule):**
+- Average delay: ~1h 58m
+- Delay range: 58m to 3h 14m
+- Midnight (00:xx) skip rate: 100% (3/3) — offset schedule avoids this slot
 - Non-midnight skip rate: 0%
-- Effective runs/day: ~5
-- Upload success rate (when triggered, excluding known-fixed bugs): ~70%
+- Effective runs/day: ~5 (expect ~6 with offset schedule)
+- Upload success rate (when triggered, excluding known-fixed bugs): ~80%
 
 ---
 

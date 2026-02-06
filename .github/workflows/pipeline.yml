@@ -1,7 +1,7 @@
 name: Twitch-to-Shorts Pipeline
 on:
   schedule:
-    - cron: '17 */4 * * *'
+    - cron: '17 2/4 * * *'
   workflow_dispatch:
     inputs:
       dry_run:
