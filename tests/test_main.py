@@ -442,10 +442,10 @@ class TestProcessStreamer:
     @patch("main.recent_upload_count", return_value=0)
     @patch("main.filter_new_clips")
     @patch("main.filter_and_rank")
-    def test_clips_capped_to_uploads_remaining(self, mock_rank, mock_dedup, mock_recent,
-                                                 mock_auth, mock_process, mock_stats,
-                                                 conn, cfg, streamer, log):
-        """Clips list is capped to uploads_remaining so only processable clips get game names."""
+    def test_loop_stops_after_uploads_remaining(self, mock_rank, mock_dedup, mock_recent,
+                                                mock_auth, mock_process, mock_stats,
+                                                conn, cfg, streamer, log):
+        """Loop processes all clips but stops uploading after uploads_remaining reached."""
         cfg.max_clips_per_streamer = 5
         cfg.max_uploads_per_window = 3
         mock_recent.return_value = 1  # 3-1 = 2 remaining
@@ -466,9 +466,10 @@ class TestProcessStreamer:
             streamer, twitch, cfg, conn, log, False,
             "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
         )
-        # Only 2 game_ids should be passed (uploads_remaining=2), not 5
+        # All 5 clips get game names fetched, but only 2 are uploaded
         game_ids_arg = twitch.get_game_names.call_args[0][0]
-        assert len(game_ids_arg) == 2
+        assert len(game_ids_arg) == 5
+        assert mock_process.call_count == 2
 
     @patch("main.update_streamer_stats")
     def test_fetch_failure_returns_zeros(self, mock_stats, conn, cfg, streamer, log):

@@ -420,9 +420,6 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
         log.info("Skipping uploads for %s: %d uploaded in last %dh", name, recent, cfg.upload_spacing_hours)
         return fetched, filtered, downloaded, processed, uploaded, failed, False
 
-    # Cap to clips that will actually be processed
-    new_clips = new_clips[:uploads_remaining]
-
     game_ids = [c.game_id for c in new_clips]
     try:
         game_names = twitch.get_game_names(game_ids)
