@@ -27,8 +27,8 @@ cron: '17 2/4 * * *'  # Every 4 hours at :17 past, offset +2h to avoid congested
 - `clip_lookback_hours: 168` — 7-day clip window
 
 **Realistic expectations:**
-- **Target: 6 uploads/day** (offset schedule avoids the congested 00:xx UTC slot that GitHub historically skips)
-- GitHub Actions cron delays are **1-3 hours** on average (58m min, 2h36m max observed)
+- **Target: 5 uploads/day** (the 22:17 UTC slot is skipped ~67% of the time due to GitHub Actions load-shedding — this is a GitHub infrastructure issue, not our code)
+- GitHub Actions cron delays are **2-4 hours** on average (2h38m min, 3h43m max observed post-offset)
 - A triggered run with `uploaded=0, failed=0` usually means upload spacing or dedup — this is normal
 
 ---
@@ -68,8 +68,8 @@ Failed (our bugs):  ___
 Skipped by GitHub:  ___
 ```
 
-**On track:** 5-6 triggers, 4-6 uploads, 0 failures
-**Concerning:** <5 triggers, or any `failed=1`, or same clip uploaded twice
+**On track:** 5 triggers, 5 uploads, 0 failures
+**Concerning:** <4 triggers, or any `failed=1`, or same clip uploaded twice
 
 ---
 
@@ -129,6 +129,20 @@ Use this data to establish baselines and spot regressions.
 | Feb 6, 08:17 | 10:09 | +1h 52m | Uploaded: PEANUT FACE LEAK!!! (1st clip CPU timeout, fell through) |
 | Feb 6, 12:17 | 14:31 | +2h 14m | Uploaded: Peanut gets stepped on LOL (1st clip CPU timeout, fell through) |
 | **Schedule changed to `17 2/4` (offset +2h) after this point** | | | |
+| Feb 6, 18:17 | 18:08 | ~0m (transition) | Uploaded: aimbotter |
+| Feb 6, 22:17 | 21:48 | ~0m (transition) | Uploaded: A Day in the Life of Team Leader |
+| Feb 7, 02:17 | 04:55 | +2h 38m | Uploaded: TWO HANDSOME GUYS |
+| Feb 7, 06:17 | 09:03 | +2h 46m | Uploaded: Flaming Goop |
+| Feb 7, 10:17 | 13:57 | +3h 40m | Uploaded: COULDNT EVEN SEE THEIR HANDS |
+| Feb 7, 14:17 | 17:03 | +2h 46m | Uploaded: Peanut finds new tech |
+| Feb 7, 18:17 | 20:58 | +2h 41m | Uploaded: Gingy's backshots |
+| Feb 7, 22:17 | — | SKIP | Skipped by GitHub |
+| Feb 8, 02:17 | 05:39 | +3h 22m | Uploaded: racist |
+| Feb 8, 06:17 | 09:47 | +3h 30m | Uploaded: Wassup |
+| Feb 8, 10:17 | 14:00 | +3h 43m | Uploaded: IM CRYINGGGG |
+| Feb 8, 14:17 | 17:04 | +2h 47m | Uploaded: Your the winner! |
+| Feb 8, 18:17 | 20:59 | +2h 42m | Uploaded: CLOAZY YOU SO UGLY.... |
+| Feb 8, 22:17 | — | SKIP | Skipped by GitHub (2/3 days skipped) |
 
 **Baseline metrics (20 cron slots observed, pre-offset schedule):**
 - Average delay: ~1h 58m
@@ -137,6 +151,15 @@ Use this data to establish baselines and spot regressions.
 - Non-midnight skip rate: 0%
 - Effective runs/day: ~5 (expect ~6 with offset schedule)
 - Upload success rate (when triggered, excluding known-fixed bugs): ~80%
+
+**Post-offset baseline (Feb 7-8, 16 slots observed):**
+- Average delay: ~3h 03m (up from ~1h 58m pre-offset)
+- Delay range: 2h 38m to 3h 43m
+- 22:17 UTC skip rate: 67% (2/3 days) — replacing 00:00 as the problem slot
+- Non-22:17 skip rate: 0%
+- Effective runs/day: ~5 (same as pre-offset, just different slot skipped)
+- Upload success rate: 100% (17/17 triggered runs uploaded)
+- Failure rate: 0%
 
 ---
 

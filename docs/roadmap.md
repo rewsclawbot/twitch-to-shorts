@@ -1,11 +1,11 @@
 # Twitch-to-Shorts: Monetization Roadmap
 
-> Grounded in reality. Written 2026-02-02. Updated 2026-02-04.
+> Grounded in reality. Written 2026-02-02. Updated 2026-02-08.
 >
 > **Current state:** Pre-revenue. Pipeline uploading to YouTube successfully.
-> 6 production Shorts live, 158 total channel views (includes old test clips).
-> Channel restriction lifted. Cron running, stabilizing. $100/mo spend on Claude Max.
-> No streamer permissions. Streamer: TheBurntPeanut.
+> 25 production Shorts live, 473 total channel views, 4 subscribers.
+> Channel restriction lifted. Cron stable at 5 uploads/day, 100% success rate.
+> $100/mo spend on Claude Max. No streamer permissions. Streamer: TheBurntPeanut.
 
 ---
 
@@ -18,18 +18,34 @@
 | # | Milestone | How you know it's done | Eng lift | Status |
 |---|-----------|----------------------|----------|--------|
 | 1.1 | Channel restriction lifts | Can upload 1 video without error | None — wait | DONE |
-| 1.2 | First clean production upload | 1 properly formatted Short is live and public | Run pipeline manually or wait for cron | DONE — 6 Shorts live |
-| 1.3 | Ramp to 1-2 uploads/day | Pipeline runs on schedule, no failures for 3 consecutive days | Config tweak: `max_uploads_per_window: 1` is already correct for 4hr cron. Just let it run | IN PROGRESS — cron running, was flaky, stabilizing |
+| 1.2 | First clean production upload | 1 properly formatted Short is live and public | Run pipeline manually or wait for cron | DONE — 25 Shorts live |
+| 1.3 | Ramp to 5 uploads/day | Pipeline runs on schedule, no failures for 3 consecutive days | Config tweak: `max_uploads_per_window: 1` is already correct for 4hr cron. Just let it run | IN PROGRESS — 5/day since Feb 6, 100% success rate, 0 failures for 3 days. Evaluating at 1.4 checkpoint |
 | 1.4 | 2-week data checkpoint | You can answer: avg views/Short, avg watch time, CTR, sub growth trend | Manual check in YouTube Studio | PENDING — target ~2026-02-16 |
 
-**Early data snapshot (2026-02-04, 6 Shorts, <3 days of data — too early to draw conclusions):**
+**Data snapshot (2026-02-08, 25 Shorts, 5 days of upload data — still early):**
 
-| Short | Length | Avg View Duration | Retention | Views |
-|-------|--------|------------------|-----------|-------|
-| Beth Oven | 1:01 | 0:38 | 65.6% | 64 |
-| When You Flex on the Nut | 0:18 | 0:17 | 50.0% | 11 |
-| PEANUT FLYS AWAY! | 0:52 | 1:12 | 40.0% | 4 |
-| money | 0:31 | 0:07 | 100% | 2 |
+| Metric | Value |
+|--------|-------|
+| Total views | 473 |
+| Avg views/Short | ~19 |
+| Avg view duration | 0:30 |
+| Avg Short length | ~30s |
+| Impressions | 1,436 |
+| CTR | 10.0% |
+| Subscribers | 4 |
+
+**Top performers (56% of all views from top 3):**
+
+| Short | Length | Views | % of Total |
+|-------|--------|-------|------------|
+| Beth Oven | 1:01 | 147 | 31.1% |
+| money | 0:31 | 72 | 15.2% |
+| You Can't Just Say That | 1:01 | 48 | 10.2% |
+| aimbotter | 0:17 | 22 | 4.7% |
+| Michael Jackson HEE HEE | 0:45 | 16 | 3.4% |
+| Remaining 20 Shorts | — | 168 | 35.5% |
+
+Most Shorts uploaded in the last 2-3 days have 3-8 views — normal for new content still being tested by the algorithm. Distribution is top-heavy: oldest Shorts have the most views (more time for impressions to accumulate).
 
 **Decision gate after 1.4:**
 - **Shorts averaging 500+ views** → Content works. Move to Phase 2.
