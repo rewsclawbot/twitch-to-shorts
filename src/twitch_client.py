@@ -129,6 +129,8 @@ class TwitchClient:
                         created_at=c["created_at"],
                         duration=c["duration"],
                         game_id=c.get("game_id", ""),
+                        vod_id=c.get("video_id") or None,
+                        vod_offset=c.get("vod_offset"),
                     )
                 except (KeyError, TypeError) as e:
                     log.warning("Skipping malformed clip data: %s", e)

@@ -15,6 +15,8 @@ class Clip:
     game_name: str = ""
     score: float = 0.0
     youtube_id: str | None = None
+    vod_id: str | None = None
+    vod_offset: int | None = None
 
 
 @dataclass

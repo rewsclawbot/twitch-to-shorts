@@ -71,6 +71,13 @@ def init_schema(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE clips ADD COLUMN yt_impressions_ctr REAL")
     if "yt_last_sync" not in cols:
         conn.execute("ALTER TABLE clips ADD COLUMN yt_last_sync TEXT")
+    if "duration" not in cols:
+        conn.execute("ALTER TABLE clips ADD COLUMN duration REAL")
+    if "vod_id" not in cols:
+        conn.execute("ALTER TABLE clips ADD COLUMN vod_id TEXT")
+    if "vod_offset" not in cols:
+        conn.execute("ALTER TABLE clips ADD COLUMN vod_offset INTEGER")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_clips_vod ON clips(vod_id, vod_offset)")
 
 
 def clip_overlaps(conn: sqlite3.Connection, streamer: str, created_at: str, window_seconds: int = 30, exclude_clip_id: str | None = None) -> bool:
@@ -88,6 +95,34 @@ def clip_overlaps(conn: sqlite3.Connection, streamer: str, created_at: str, wind
            AND created_at >= ? AND created_at <= ?
            AND ABS(julianday(created_at) - julianday(?)) * 86400 < ?"""
     params: list = [streamer, lower, upper, created_at, window_seconds]
+    if exclude_clip_id:
+        query += " AND clip_id != ?"
+        params.append(exclude_clip_id)
+    row = conn.execute(query, params).fetchone()
+    return row is not None
+
+
+def vod_overlaps(
+    conn: sqlite3.Connection,
+    vod_id: str | None,
+    vod_offset: int | None,
+    duration: float,
+    exclude_clip_id: str | None = None,
+) -> bool:
+    """Check if any existing clip overlaps the given VOD time range.
+
+    Returns False immediately if vod_id is None (VOD deleted — fall back to created_at dedup).
+    Uses standard interval overlap: A overlaps B iff A.start < B.end AND B.start < A.end.
+    """
+    if vod_id is None or vod_offset is None:
+        return False
+    query = """SELECT 1 FROM clips
+               WHERE vod_id = ?
+                 AND vod_offset IS NOT NULL
+                 AND duration IS NOT NULL
+                 AND ? < vod_offset + duration
+                 AND vod_offset < ? + ?"""
+    params: list = [vod_id, vod_offset, vod_offset, duration]
     if exclude_clip_id:
         query += " AND clip_id != ?"
         params.append(exclude_clip_id)
@@ -122,16 +157,20 @@ def recent_upload_count(
 
 def insert_clip(conn: sqlite3.Connection, clip: Clip):
     conn.execute(
-        """INSERT INTO clips (clip_id, streamer, channel_key, title, view_count, created_at, posted_at, youtube_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """INSERT INTO clips (clip_id, streamer, channel_key, title, view_count, created_at, posted_at, youtube_id, duration, vod_id, vod_offset)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(clip_id) DO UPDATE SET
                youtube_id = excluded.youtube_id,
                posted_at = excluded.posted_at,
                view_count = excluded.view_count,
                title = excluded.title,
-               channel_key = excluded.channel_key""",
+               channel_key = excluded.channel_key,
+               duration = COALESCE(excluded.duration, clips.duration),
+               vod_id = COALESCE(excluded.vod_id, clips.vod_id),
+               vod_offset = COALESCE(excluded.vod_offset, clips.vod_offset)""",
         (clip.id, clip.streamer, clip.channel_key, clip.title, clip.view_count,
-         clip.created_at, datetime.now(UTC).isoformat(), clip.youtube_id),
+         clip.created_at, datetime.now(UTC).isoformat(), clip.youtube_id,
+         clip.duration, getattr(clip, 'vod_id', None), getattr(clip, 'vod_offset', None)),
     )
     conn.commit()
 
@@ -139,14 +178,18 @@ def insert_clip(conn: sqlite3.Connection, clip: Clip):
 def record_known_clip(conn: sqlite3.Connection, clip: Clip):
     """Record a clip that's already on YouTube (duplicate). Does not set posted_at."""
     conn.execute(
-        """INSERT INTO clips (clip_id, streamer, channel_key, title, view_count, created_at, youtube_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
+        """INSERT INTO clips (clip_id, streamer, channel_key, title, view_count, created_at, youtube_id, duration, vod_id, vod_offset)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(clip_id) DO UPDATE SET
                youtube_id = COALESCE(clips.youtube_id, excluded.youtube_id),
                view_count = excluded.view_count,
                title = excluded.title,
-               channel_key = excluded.channel_key""",
-        (clip.id, clip.streamer, clip.channel_key, clip.title, clip.view_count, clip.created_at, clip.youtube_id),
+               channel_key = excluded.channel_key,
+               duration = COALESCE(excluded.duration, clips.duration),
+               vod_id = COALESCE(excluded.vod_id, clips.vod_id),
+               vod_offset = COALESCE(excluded.vod_offset, clips.vod_offset)""",
+        (clip.id, clip.streamer, clip.channel_key, clip.title, clip.view_count, clip.created_at, clip.youtube_id,
+         clip.duration, getattr(clip, 'vod_id', None), getattr(clip, 'vod_offset', None)),
     )
     conn.commit()
 
@@ -277,7 +320,7 @@ def get_streamer_performance_multiplier(conn: sqlite3.Connection, streamer: str)
            WHERE streamer = ? AND yt_impressions_ctr IS NOT NULL""",
         (streamer,),
     ).fetchone()
-    if not row or row["cnt"] < 3:
+    if not row or row["cnt"] < 20:
         return 1.0
     avg_ctr = row["avg_ctr"]
     if avg_ctr is None or avg_ctr <= 0:

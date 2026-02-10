@@ -112,3 +112,117 @@ class TestFilterNewClips:
         )
         result = filter_new_clips(conn, [new_clip])
         assert len(result) == 1
+
+    def test_vod_overlap_filters_duplicate_from_db(self, conn):
+        """A new clip overlapping a DB clip's VOD range should be filtered out."""
+        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
+        existing = make_clip(
+            clip_id="db_clip",
+            streamer="streamer_x",
+            created_at=base_time.isoformat(),
+            vod_id="vod_abc",
+            vod_offset=100,
+            duration=30,
+        )
+        insert_clip(conn, existing)
+
+        # New clip overlaps: [120, 150] overlaps [100, 130]
+        new_clip = make_clip(
+            clip_id="new_vod_dup",
+            streamer="streamer_x",
+            created_at=(base_time + timedelta(minutes=5)).isoformat(),
+            vod_id="vod_abc",
+            vod_offset=120,
+            duration=30,
+        )
+        result = filter_new_clips(conn, [new_clip])
+        assert len(result) == 0
+
+    def test_vod_no_overlap_passes(self, conn):
+        """A new clip adjacent to (but not overlapping) a DB clip's VOD range should pass."""
+        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
+        existing = make_clip(
+            clip_id="db_clip",
+            streamer="streamer_x",
+            created_at=base_time.isoformat(),
+            vod_id="vod_abc",
+            vod_offset=100,
+            duration=30,
+        )
+        insert_clip(conn, existing)
+
+        # New clip at [130, 160] — adjacent, no overlap
+        new_clip = make_clip(
+            clip_id="new_adjacent",
+            streamer="streamer_x",
+            created_at=(base_time + timedelta(minutes=5)).isoformat(),
+            vod_id="vod_abc",
+            vod_offset=130,
+            duration=30,
+        )
+        result = filter_new_clips(conn, [new_clip])
+        assert len(result) == 1
+
+    def test_vod_none_falls_back_to_created_at(self, conn):
+        """Clips without vod_id should still use created_at dedup."""
+        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
+        existing = make_clip(
+            clip_id="db_clip",
+            streamer="streamer_x",
+            created_at=base_time.isoformat(),
+        )
+        insert_clip(conn, existing)
+
+        # Within 30s created_at window, no VOD data
+        new_clip = make_clip(
+            clip_id="no_vod",
+            streamer="streamer_x",
+            created_at=(base_time + timedelta(seconds=15)).isoformat(),
+        )
+        result = filter_new_clips(conn, [new_clip])
+        assert len(result) == 0
+
+    def test_batch_vod_overlap_keeps_first(self, conn):
+        """Within a batch, two clips sharing VOD range should keep only the first (highest-ranked)."""
+        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
+        clip_a = make_clip(
+            clip_id="batch_vod_1",
+            streamer="streamer_x",
+            created_at=base_time.isoformat(),
+            vod_id="vod_abc",
+            vod_offset=100,
+            duration=30,
+        )
+        clip_b = make_clip(
+            clip_id="batch_vod_2",
+            streamer="streamer_x",
+            created_at=(base_time + timedelta(minutes=3)).isoformat(),
+            vod_id="vod_abc",
+            vod_offset=110,
+            duration=30,
+        )
+        result = filter_new_clips(conn, [clip_a, clip_b])
+        assert len(result) == 1
+        assert result[0].id == "batch_vod_1"
+
+    def test_batch_vod_different_vods_both_pass(self, conn):
+        """Clips from different VODs should both pass batch dedup."""
+        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
+        clip_a = make_clip(
+            clip_id="vod1_clip",
+            streamer="streamer_x",
+            created_at=base_time.isoformat(),
+            vod_id="vod_abc",
+            vod_offset=100,
+            duration=30,
+        )
+        clip_b = make_clip(
+            clip_id="vod2_clip",
+            streamer="streamer_x",
+            created_at=(base_time + timedelta(minutes=3)).isoformat(),
+            vod_id="vod_xyz",
+            vod_offset=100,
+            duration=30,
+        )
+        result = filter_new_clips(conn, [clip_a, clip_b])
+        assert len(result) == 2

@@ -14,6 +14,7 @@ from src.db import (
     update_streamer_stats,
     update_youtube_metrics,
     update_youtube_reach_metrics,
+    vod_overlaps,
 )
 from tests.conftest import make_clip
 
@@ -256,8 +257,8 @@ class TestPerformanceMultiplier:
     def test_returns_one_with_no_data(self, conn):
         assert get_streamer_performance_multiplier(conn, "nobody") == 1.0
 
-    def test_returns_one_with_fewer_than_three_data_points(self, conn):
-        for i in range(2):
+    def test_returns_one_with_fewer_than_twenty_data_points(self, conn):
+        for i in range(19):
             conn.execute(
                 "INSERT INTO clips (clip_id, streamer, youtube_id, yt_impressions_ctr) VALUES (?, ?, ?, ?)",
                 (f"pm_{i}", "s", f"yt_{i}", 0.04),
@@ -266,7 +267,7 @@ class TestPerformanceMultiplier:
         assert get_streamer_performance_multiplier(conn, "s") == 1.0
 
     def test_high_ctr_boosts_multiplier(self, conn):
-        for i in range(5):
+        for i in range(20):
             conn.execute(
                 "INSERT INTO clips (clip_id, streamer, youtube_id, yt_impressions_ctr) VALUES (?, ?, ?, ?)",
                 (f"hi_{i}", "good", f"yt_hi_{i}", 0.04),
@@ -276,7 +277,7 @@ class TestPerformanceMultiplier:
         assert mult > 1.0
 
     def test_low_ctr_reduces_multiplier(self, conn):
-        for i in range(5):
+        for i in range(20):
             conn.execute(
                 "INSERT INTO clips (clip_id, streamer, youtube_id, yt_impressions_ctr) VALUES (?, ?, ?, ?)",
                 (f"lo_{i}", "poor", f"yt_lo_{i}", 0.005),
@@ -286,7 +287,7 @@ class TestPerformanceMultiplier:
         assert mult < 1.0
 
     def test_multiplier_clamped(self, conn):
-        for i in range(5):
+        for i in range(20):
             conn.execute(
                 "INSERT INTO clips (clip_id, streamer, youtube_id, yt_impressions_ctr) VALUES (?, ?, ?, ?)",
                 (f"ex_{i}", "extreme", f"yt_ex_{i}", 0.20),
@@ -385,3 +386,65 @@ class TestTouchYoutubeMetricsSync:
         touch_youtube_metrics_sync(conn, "yt_ghost", "2026-02-10T00:00:00+00:00")
         row = conn.execute("SELECT * FROM clips WHERE youtube_id = 'yt_ghost'").fetchone()
         assert row is None
+
+
+class TestVodOverlaps:
+    def _insert_vod_clip(self, conn, clip_id, vod_id, vod_offset, duration):
+        conn.execute(
+            "INSERT INTO clips (clip_id, streamer, vod_id, vod_offset, duration) VALUES (?, ?, ?, ?, ?)",
+            (clip_id, "s", vod_id, vod_offset, duration),
+        )
+        conn.commit()
+
+    def test_overlapping_ranges(self, conn):
+        """Clip at [100, 130] overlaps with query [120, 150]."""
+        self._insert_vod_clip(conn, "v1", "vod_abc", 100, 30)
+        assert vod_overlaps(conn, "vod_abc", 120, 30) is True
+
+    def test_non_overlapping_ranges(self, conn):
+        """Clip at [100, 130] does not overlap with query [130, 160] (adjacent, no overlap)."""
+        self._insert_vod_clip(conn, "v1", "vod_abc", 100, 30)
+        assert vod_overlaps(conn, "vod_abc", 130, 30) is False
+
+    def test_fully_contained(self, conn):
+        """Clip at [100, 160] fully contains query [120, 140]."""
+        self._insert_vod_clip(conn, "v1", "vod_abc", 100, 60)
+        assert vod_overlaps(conn, "vod_abc", 120, 20) is True
+
+    def test_different_vod_id_no_overlap(self, conn):
+        """Same offset but different VOD — no overlap."""
+        self._insert_vod_clip(conn, "v1", "vod_abc", 100, 30)
+        assert vod_overlaps(conn, "vod_xyz", 100, 30) is False
+
+    def test_returns_false_when_vod_id_none(self, conn):
+        """If vod_id is None (VOD deleted), always returns False."""
+        self._insert_vod_clip(conn, "v1", "vod_abc", 100, 30)
+        assert vod_overlaps(conn, None, 100, 30) is False
+
+    def test_returns_false_when_vod_offset_none(self, conn):
+        """If vod_offset is None, always returns False."""
+        self._insert_vod_clip(conn, "v1", "vod_abc", 100, 30)
+        assert vod_overlaps(conn, "vod_abc", None, 30) is False
+
+    def test_exclude_clip_id(self, conn):
+        """A clip should not overlap with itself."""
+        self._insert_vod_clip(conn, "v1", "vod_abc", 100, 30)
+        assert vod_overlaps(conn, "vod_abc", 100, 30, exclude_clip_id="v1") is False
+
+    def test_insert_clip_stores_vod_fields(self, conn):
+        """insert_clip should persist vod_id, vod_offset, and duration."""
+        clip = make_clip(clip_id="vod_test", vod_id="vod_123", vod_offset=500, duration=25)
+        insert_clip(conn, clip)
+        row = conn.execute("SELECT vod_id, vod_offset, duration FROM clips WHERE clip_id = 'vod_test'").fetchone()
+        assert row["vod_id"] == "vod_123"
+        assert row["vod_offset"] == 500
+        assert row["duration"] == 25
+
+    def test_record_known_clip_stores_vod_fields(self, conn):
+        """record_known_clip should persist vod_id, vod_offset, and duration."""
+        clip = make_clip(clip_id="vod_known", vod_id="vod_456", vod_offset=200, duration=40, youtube_id="yt_ext")
+        record_known_clip(conn, clip)
+        row = conn.execute("SELECT vod_id, vod_offset, duration FROM clips WHERE clip_id = 'vod_known'").fetchone()
+        assert row["vod_id"] == "vod_456"
+        assert row["vod_offset"] == 200
+        assert row["duration"] == 40
