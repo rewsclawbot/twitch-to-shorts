@@ -74,7 +74,10 @@ def fetch_reach_metrics(
             impressions = _to_int(row.get("video_thumbnail_impressions"))
             if impressions is None:
                 continue
-            ctr = _normalize_ctr(_to_float(row.get("video_thumbnail_impressions_ctr")))
+            # Reporting API CSV returns CTR as a raw fraction (0.05 = 5%),
+            # unlike Analytics API which returns percentages (5.0 = 5%).
+            # Do NOT apply _normalize_ctr here.
+            ctr = _to_float(row.get("video_thumbnail_impressions_ctr"))
             totals[video_id]["impressions"] += impressions
             if ctr is not None:
                 totals[video_id]["ctr_sum"] += ctr * impressions

@@ -93,8 +93,8 @@ class TestFetchReachMetrics:
 
         assert "v1" in result
         assert result["v1"]["yt_impressions"] == 100
-        # CTR: 5.0 / 100.0 = 0.05
-        assert result["v1"]["yt_impressions_ctr"] == pytest.approx(0.05)
+        # Reporting API CSV returns CTR as raw fraction (5.0 = 500%), used as-is
+        assert result["v1"]["yt_impressions_ctr"] == pytest.approx(5.0)
 
     @patch("src.youtube_reporting._iter_report_rows")
     @patch("src.youtube_reporting._filter_reports")
@@ -102,12 +102,12 @@ class TestFetchReachMetrics:
     @patch("src.youtube_reporting._ensure_job", return_value="job-1")
     def test_weighted_ctr_across_rows(self, _mock_ensure, _mock_list, mock_filter,
                                        mock_iter):
-        """Two rows for same video: imp=100/ctr=4.0 and imp=200/ctr=8.0.
+        """Two rows for same video: imp=100/ctr=0.04 and imp=200/ctr=0.08.
         Weighted CTR = (100*0.04 + 200*0.08) / 300 = 0.06667"""
         mock_filter.return_value = [{"downloadUrl": "http://example.com/r1"}]
         mock_iter.return_value = iter([
-            _make_row("v1", "20260110", 100, "4.0"),
-            _make_row("v1", "20260111", 200, "8.0"),
+            _make_row("v1", "20260110", 100, "0.04"),
+            _make_row("v1", "20260111", 200, "0.08"),
         ])
         service = _make_service_stub()
         result = fetch_reach_metrics(service, {"v1"}, "2026-01-01", "2026-01-31")
