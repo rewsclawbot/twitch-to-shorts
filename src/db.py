@@ -246,8 +246,8 @@ def update_youtube_reach_metrics(
 ):
     conn.execute(
         """UPDATE clips
-           SET yt_impressions = ?,
-               yt_impressions_ctr = ?,
+           SET yt_impressions = COALESCE(?, yt_impressions),
+               yt_impressions_ctr = COALESCE(?, yt_impressions_ctr),
                yt_last_sync = ?
            WHERE youtube_id = ?""",
         (impressions, impressions_ctr, synced_at, youtube_id),

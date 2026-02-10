@@ -77,7 +77,8 @@ def fetch_video_metrics(service, video_id: str, start_date: str, end_date: str) 
     def _normalize_ctr(value):
         if value is None:
             return None
-        return value / 100.0 if value > 1 else value
+        # CTR is returned as a percentage (e.g. 0.6 means 0.6%), so normalize to fraction.
+        return value / 100.0
 
     result = {
         "yt_views": _to_int(data.get("views")),

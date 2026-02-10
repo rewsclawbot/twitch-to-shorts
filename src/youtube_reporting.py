@@ -232,4 +232,5 @@ def _to_float(value):
 def _normalize_ctr(value: float | None) -> float | None:
     if value is None:
         return None
-    return value / 100.0 if value > 1 else value
+    # CTR is reported as a percentage (e.g. 0.6 means 0.6%), so normalize to fraction.
+    return value / 100.0
