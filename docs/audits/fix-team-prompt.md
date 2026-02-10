@@ -23,9 +23,7 @@ Create an agent team to fix all 28 prioritized findings from our codebase audit.
 Use Sonnet for all teammates. Use delegate mode — you coordinate only, do not write code.
 
 Context files each teammate MUST read before starting:
-- tasks/audit-summary.md (prioritized action plan)
-- tasks/audit-security.md, tasks/audit-reliability.md, tasks/audit-performance.md, tasks/audit-architecture.md (detailed findings with line numbers)
-- tasks/lessons.md (known patterns and gotchas from previous work)
+- @audit-summary.md, audit-history.md
 - README.md (architecture reference)
 
 Spawn 4 teammates:

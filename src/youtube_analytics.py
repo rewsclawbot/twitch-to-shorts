@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -75,5 +75,5 @@ def fetch_video_metrics(service, video_id: str, start_date: str, end_date: str) 
         "yt_avg_view_percentage": _to_float(data.get("averageViewPercentage")),
         "yt_impressions": _to_int(data.get("impressions")),
         "yt_impressions_ctr": _to_float(data.get("impressionsCtr")),
-        "yt_last_sync": datetime.now(timezone.utc).isoformat(),
+        "yt_last_sync": datetime.now(UTC).isoformat(),
     }

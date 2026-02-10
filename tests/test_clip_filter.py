@@ -1,6 +1,4 @@
-from datetime import datetime, timezone, timedelta
-
-import pytest
+from datetime import UTC, datetime, timedelta
 
 from src.clip_filter import compute_score, filter_and_rank
 from tests.conftest import make_clip
@@ -12,7 +10,7 @@ class TestComputeScore:
         clip = make_clip(
             view_count=1000,
             duration=30,
-            created_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+            created_at=(datetime.now(UTC) - timedelta(hours=1)).isoformat(),
         )
         score = compute_score(clip, velocity_weight=2.0)
         density = 1000 / 30
@@ -29,7 +27,7 @@ class TestComputeScore:
 
     def test_future_created_at_clamps_age_to_minimum(self):
         """A clip created in the future should have age clamped to 0.1h."""
-        future = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+        future = (datetime.now(UTC) + timedelta(hours=2)).isoformat()
         clip = make_clip(view_count=100, duration=10, created_at=future)
         score = compute_score(clip)
         # velocity = 100 / 0.1 = 1000; density = 100/10 = 10
@@ -52,7 +50,7 @@ class TestComputeScore:
     def test_log_age_decay_increases_score_for_older_clips(self):
         clip = make_clip(
             view_count=1000,
-            created_at=(datetime.now(timezone.utc) - timedelta(hours=6)).isoformat(),
+            created_at=(datetime.now(UTC) - timedelta(hours=6)).isoformat(),
         )
         linear = compute_score(clip, age_decay="linear")
         log_decay = compute_score(clip, age_decay="log")

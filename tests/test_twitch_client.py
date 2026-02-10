@@ -1,12 +1,11 @@
 """Tests for TwitchClient: token refresh, rate limiting, pagination, backoff, TLS verification."""
 
-import time
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
 
-from src.twitch_client import TwitchClient, TOKEN_URL, CLIPS_URL, GAMES_URL
+from src.twitch_client import TwitchClient
 
 
 def _make_token_response(token="test_token", expires_in=3600):

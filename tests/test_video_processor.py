@@ -1,7 +1,7 @@
 """Tests for video_processor: filter building, silence detection, probe, GPU/CPU fallback."""
 
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -9,8 +9,11 @@ from src.models import FacecamConfig
 from src.video_processor import (
     _batch_sample_ydif,
     _build_composite_filter,
-    _detect_leading_silence,
+    _escape_subtitle_path,
     _probe_video_info,
+    _run_ffmpeg,
+    crop_to_vertical,
+    detect_leading_silence,
     extract_thumbnail,
 )
 
@@ -64,13 +67,13 @@ class TestDetectLeadingSilence:
             ),
             returncode=0,
         )
-        result = _detect_leading_silence("test.mp4")
+        result = detect_leading_silence("test.mp4")
         assert result == 2.5
 
     @patch("src.video_processor.subprocess.run")
     def test_no_silence(self, mock_run):
         mock_run.return_value = MagicMock(stderr="", returncode=0)
-        result = _detect_leading_silence("test.mp4")
+        result = detect_leading_silence("test.mp4")
         assert result == 0.0
 
     @patch("src.video_processor.subprocess.run")
@@ -82,7 +85,7 @@ class TestDetectLeadingSilence:
             ),
             returncode=0,
         )
-        result = _detect_leading_silence("test.mp4")
+        result = detect_leading_silence("test.mp4")
         assert result == 0.0
 
     @patch("src.video_processor.subprocess.run")
@@ -94,13 +97,13 @@ class TestDetectLeadingSilence:
             ),
             returncode=0,
         )
-        result = _detect_leading_silence("test.mp4")
+        result = detect_leading_silence("test.mp4")
         assert result == 5.0
 
     @patch("src.video_processor.subprocess.run")
     def test_exception_returns_zero(self, mock_run):
         mock_run.side_effect = Exception("ffmpeg not found")
-        result = _detect_leading_silence("test.mp4")
+        result = detect_leading_silence("test.mp4")
         assert result == 0.0
 
     @patch("src.video_processor.subprocess.run")
@@ -113,7 +116,7 @@ class TestDetectLeadingSilence:
             returncode=0,
         )
         # 0.005 <= 0.01, so treated as start
-        result = _detect_leading_silence("test.mp4")
+        result = detect_leading_silence("test.mp4")
         assert result == 1.2
 
 
@@ -178,7 +181,7 @@ class TestGpuCpuFallback:
     @patch("src.video_processor.os.environ", {"DISABLE_GPU_ENCODE": "1"})
     @patch("src.video_processor._run_ffmpeg")
     @patch("src.video_processor._measure_loudness", return_value=None)
-    @patch("src.video_processor._detect_leading_silence", return_value=0.0)
+    @patch("src.video_processor.detect_leading_silence", return_value=0.0)
     @patch("src.video_processor._probe_video_info", return_value=(30.0, (1920, 1080)))
     @patch("src.video_processor.os.path.exists", return_value=False)
     def test_gpu_disabled_skips_gpu(self, mock_exists, mock_probe, mock_silence,
@@ -196,7 +199,7 @@ class TestGpuCpuFallback:
     @patch.dict("os.environ", {"DISABLE_GPU_ENCODE": ""})
     @patch("src.video_processor._run_ffmpeg")
     @patch("src.video_processor._measure_loudness", return_value=None)
-    @patch("src.video_processor._detect_leading_silence", return_value=0.0)
+    @patch("src.video_processor.detect_leading_silence", return_value=0.0)
     @patch("src.video_processor._probe_video_info", return_value=(30.0, (1920, 1080)))
     @patch("src.video_processor.os.path.exists", return_value=False)
     def test_gpu_fails_falls_back_to_cpu(self, mock_exists, mock_probe, mock_silence,
@@ -221,7 +224,7 @@ class TestSilenceDetectionTimeLimit:
     @patch("src.video_processor.subprocess.run")
     def test_t_flag_in_silence_detection_args(self, mock_run):
         mock_run.return_value = MagicMock(stderr="", returncode=0)
-        _detect_leading_silence("test.mp4")
+        detect_leading_silence("test.mp4")
         args = mock_run.call_args[0][0]
         # -t and 6 should appear before -i
         assert "-t" in args
@@ -305,3 +308,118 @@ class TestExtractThumbnailDurationParam:
         result = extract_thumbnail("test.mp4", "/tmp/thumbs", duration=0)
         assert result is None
         mock_batch.assert_not_called()
+
+
+class TestSubtitleIntegration:
+    """Verify subtitle filter injection in _run_ffmpeg and path escaping."""
+
+    def test_escape_subtitle_path_windows(self):
+        assert _escape_subtitle_path("C:\\Users\\test\\file.ass") == "C\\:/Users/test/file.ass"
+
+    def test_escape_subtitle_path_unix(self):
+        assert _escape_subtitle_path("/tmp/test/file.ass") == "/tmp/test/file.ass"
+
+    def test_escape_subtitle_path_colon_only(self):
+        assert _escape_subtitle_path("C:/Users/test.ass") == "C\\:/Users/test.ass"
+
+    @patch("src.video_processor.os.replace")
+    @patch("src.video_processor.os.path.getsize", return_value=1024)
+    @patch("src.video_processor.os.path.exists", return_value=True)
+    @patch("src.video_processor.subprocess.Popen")
+    def test_composite_mode_subtitle_injection(self, mock_popen, mock_exists,
+                                                mock_getsize, mock_replace):
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = (b"", b"")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+
+        vf = "[0:v]crop=ih*9/16:ih,scale=1080:1920[game];[0:v]crop=iw*0.25:ih*0.25,scale=420:-2[cam];[game][cam]overlay=(W-w)/2:0[out]"
+        _run_ffmpeg("in.mp4", "out.mp4", vf, "test", gpu=False,
+                    subtitle_path="/tmp/captions.ass")
+
+        cmd = mock_popen.call_args[0][0]
+        fc_idx = cmd.index("-filter_complex")
+        fc_value = cmd[fc_idx + 1]
+        # [out] should be replaced with [tmp] and ASS subtitle filter appended
+        assert "[tmp]" in fc_value
+        assert "ass=" in fc_value
+        assert fc_value.endswith("[out]")
+
+    @patch("src.video_processor.os.replace")
+    @patch("src.video_processor.os.path.getsize", return_value=1024)
+    @patch("src.video_processor.os.path.exists", return_value=True)
+    @patch("src.video_processor.subprocess.Popen")
+    def test_simple_mode_subtitle_injection(self, mock_popen, mock_exists,
+                                             mock_getsize, mock_replace):
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = (b"", b"")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+
+        vf = "crop=ih*9/16:ih,scale=1080:1920"
+        _run_ffmpeg("in.mp4", "out.mp4", vf, "test", gpu=False,
+                    subtitle_path="/tmp/captions.ass")
+
+        cmd = mock_popen.call_args[0][0]
+        vf_idx = cmd.index("-vf")
+        vf_value = cmd[vf_idx + 1]
+        assert "ass=" in vf_value
+        assert vf_value.startswith("crop=ih*9/16:ih,scale=1080:1920,ass=")
+
+    @patch("src.video_processor.os.replace")
+    @patch("src.video_processor.os.path.getsize", return_value=1024)
+    @patch("src.video_processor.os.path.exists", return_value=True)
+    @patch("src.video_processor.subprocess.Popen")
+    def test_no_subtitle_path_unchanged(self, mock_popen, mock_exists,
+                                         mock_getsize, mock_replace):
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = (b"", b"")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+
+        vf = "crop=ih*9/16:ih,scale=1080:1920"
+        _run_ffmpeg("in.mp4", "out.mp4", vf, "test", gpu=False)
+
+        cmd = mock_popen.call_args[0][0]
+        vf_idx = cmd.index("-vf")
+        vf_value = cmd[vf_idx + 1]
+        assert vf_value == "crop=ih*9/16:ih,scale=1080:1920"
+        assert "ass=" not in vf_value
+
+    @patch("src.video_processor._run_ffmpeg")
+    @patch("src.video_processor._measure_loudness", return_value=None)
+    @patch("src.video_processor.detect_leading_silence", return_value=0.0)
+    @patch("src.video_processor._probe_video_info", return_value=(30.0, (1920, 1080)))
+    @patch("src.video_processor.os.path.exists", return_value=False)
+    def test_crop_to_vertical_passes_subtitle_path(self, mock_exists, mock_probe,
+                                                     mock_silence, mock_loudness,
+                                                     mock_ffmpeg):
+        mock_ffmpeg.return_value = True
+
+        with patch.dict("os.environ", {"DISABLE_GPU_ENCODE": "1"}):
+            crop_to_vertical("test.mp4", "/tmp/test", facecam_mode="off",
+                           subtitle_path="/tmp/test.ass")
+
+        _, kwargs = mock_ffmpeg.call_args
+        assert kwargs.get("subtitle_path") == "/tmp/test.ass"
+
+
+class TestPresetFast:
+    """Verify CPU preset is always 'fast'."""
+
+    @patch("src.video_processor.os.replace")
+    @patch("src.video_processor.os.path.getsize", return_value=1024)
+    @patch("src.video_processor.os.path.exists", return_value=True)
+    @patch("src.video_processor.subprocess.Popen")
+    def test_cpu_preset_is_fast(self, mock_popen, mock_exists,
+                                 mock_getsize, mock_replace):
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = (b"", b"")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+
+        _run_ffmpeg("in.mp4", "out.mp4", "scale=1080:1920", "test", gpu=False)
+
+        cmd = mock_popen.call_args[0][0]
+        preset_idx = cmd.index("-preset")
+        assert cmd[preset_idx + 1] == "fast"

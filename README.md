@@ -13,7 +13,8 @@ Automated pipeline: Twitch clips → score → dedup → download → vertical c
 | `src/dedup.py` | 64 | DB/overlap/blocklist dedup | `filter_new_clips()` |
 | `src/downloader.py` | 73 | yt-dlp wrapper, atomic .part→rename | `download_clip()` |
 | `src/video_processor.py` | 444 | ffmpeg: crop, facecam, loudnorm, thumbnails | `crop_to_vertical()`, `extract_thumbnail()` |
-| `src/media_utils.py` | 22 | Shared FFMPEG/FFPROBE constants, validation | `FFMPEG`, `FFPROBE`, `is_valid_video()` |
+| `src/captioner.py` | 200 | Deepgram STT, ASS subtitle generation | `generate_captions()`, `transcribe_clip()`, `generate_ass_subtitles()` |
+| `src/media_utils.py` | 55 | Shared FFMPEG/FFPROBE constants, validation, audio extraction | `FFMPEG`, `FFPROBE`, `is_valid_video()`, `extract_audio()`, `safe_remove()` |
 | `src/youtube_uploader.py` | 427 | YouTube Data API v3: upload, templates, tags, channel dedup | `upload_short()`, `build_upload_title()`, `QuotaExhaustedError` |
 | `src/youtube_analytics.py` | 79 | YouTube Analytics API (dormant) | `fetch_video_metrics()` |
 | `src/db.py` | 269 | SQLite WAL, schema, migrations, metrics | `get_connection()`, `insert_clip()`, `get_streamer_performance_multiplier()` |
@@ -25,17 +26,19 @@ Automated pipeline: Twitch clips → score → dedup → download → vertical c
 3. **Dedup** — `filter_new_clips()`: skip if already in DB (with youtube_id or fail_count≥3), in blocklist, or within 30s overlap window
 4. **Rate limit** — `recent_upload_count()`: max 1 upload per streamer per 2h window
 5. **Download** — `download_clip()`: yt-dlp → `.part` file → `os.replace()` atomic rename
-6. **Process** — `crop_to_vertical()`:
+6. **Caption** (optional) — `generate_captions()`: extract audio (FLAC), Deepgram Nova-2 STT, generate ASS subtitles with silence offset adjustment
+7. **Process** — `crop_to_vertical()`:
    - Probe dimensions, detect leading silence (trim up to 5s)
    - Facecam detection: YDIF signal analysis at 25/50/75% timestamps, threshold >1.0
    - Composite filter (facecam top 20% + gameplay bottom 80%) or center-crop
    - 2-pass EBU R128 loudnorm (measure → apply with `linear=true`)
    - GPU encode (h264_nvenc) → CPU fallback (libx264)
+   - Optional burned-in ASS subtitles via `ass=` filter
    - Atomic write: `.tmp` → `os.replace()`
-7. **Upload** — `upload_short()`: resumable upload, chunk retry (4 attempts, exponential backoff), quota detection
-8. **Verify** — `verify_upload()`: confirm status is `uploaded`/`processed`
-9. **Thumbnail** — `extract_thumbnail()`: YDIF-based best-frame selection, `set_thumbnail()`
-10. **Analytics sync** — (when enabled) `_sync_streamer_metrics()` → `fetch_video_metrics()` → `update_youtube_metrics()`
+8. **Upload** — `upload_short()`: resumable upload, chunk retry (4 attempts, exponential backoff), quota detection
+9. **Verify** — `verify_upload()`: confirm status is `uploaded`/`processed`
+10. **Thumbnail** — `extract_thumbnail()`: YDIF-based best-frame selection, `set_thumbnail()`
+11. **Analytics sync** — (when enabled) `_sync_streamer_metrics()` → `fetch_video_metrics()` → `update_youtube_metrics()`
 
 ## DB Schema
 
@@ -70,8 +73,8 @@ Indexes: `idx_clips_streamer`, `idx_clips_posted`. Auto-migration adds missing c
 
 - **`twitch`** — credentials read from env (`TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`), not from file
 - **`youtube`** — `client_secrets_file`, `title_template`/`title_templates` (A/B), `description_template`/`description_templates`, `extra_tags`, `thumbnail_enabled`/`thumbnail_samples`/`thumbnail_width`
-- **`streamers[]`** — `name`, `twitch_id`, `youtube_credentials`, `facecam` (x/y/w/h/output_w), `facecam_mode` (auto|always|off), `privacy_status`, `category_id`, `extra_tags`
-- **`pipeline`** — `max_clips_per_streamer`, `max_clip_duration_seconds`, `velocity_weight`, `clip_lookback_hours`, `min_view_count`, `age_decay` (linear|log), `view_transform` (linear|log), `title_quality_weight`, `tmp_dir`, `db_path`, `log_file`, `upload_spacing_hours`, `max_uploads_per_window`, `analytics_enabled`, `analytics_min_age_hours`, `analytics_sync_interval_hours`, `analytics_max_videos_per_run`
+- **`streamers[]`** — `name`, `twitch_id`, `youtube_credentials`, `facecam` (x/y/w/h/output_w), `facecam_mode` (auto|always|off), `privacy_status`, `category_id`, `extra_tags`, `captions` (per-streamer override, null=use global)
+- **`pipeline`** — `max_clips_per_streamer`, `max_clip_duration_seconds`, `velocity_weight`, `clip_lookback_hours`, `min_view_count`, `age_decay` (linear|log), `view_transform` (linear|log), `title_quality_weight`, `tmp_dir`, `db_path`, `log_file`, `upload_spacing_hours`, `max_uploads_per_window`, `captions_enabled`, `analytics_enabled`, `analytics_min_age_hours`, `analytics_sync_interval_hours`, `analytics_max_videos_per_run`
 
 Template placeholders: `{title}`, `{streamer}`, `{game}`, `{game_name}`
 
@@ -109,7 +112,7 @@ Template placeholders: `{title}`, `{streamer}`, `{game}`, `{game_name}`
 python -m pytest tests/ -v
 ```
 
-183 tests across 8 test files. Uses `conftest.py` with shared fixtures. All modules have test coverage including `main.py`, `video_processor.py`, `twitch_client.py`, and subprocess safety tests.
+225 tests across 9 test files. Uses `conftest.py` with shared fixtures. All modules have test coverage including `main.py`, `video_processor.py`, `twitch_client.py`, `captioner.py`, and subprocess safety tests.
 
 ## CI/CD
 
@@ -126,6 +129,7 @@ python -m pytest tests/ -v
 Python 3.12+, ffmpeg/ffprobe on PATH, yt-dlp. See `requirements.txt` for pinned versions.
 
 Runtime: requests, google-api-python-client, google-auth-oauthlib, pyyaml, python-dotenv, yt-dlp
+Optional: deepgram-sdk (for captions — `pip install -r requirements-captions.txt`)
 Dev: pytest, ruff, mypy, pre-commit
 
 ## Gotchas

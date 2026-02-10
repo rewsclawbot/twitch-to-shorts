@@ -1,9 +1,7 @@
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
-import pytest
-
+from src.db import increment_fail_count, insert_clip
 from src.dedup import filter_new_clips
-from src.db import insert_clip, increment_fail_count
 from tests.conftest import make_clip
 
 
@@ -13,7 +11,7 @@ class TestFilterNewClips:
 
     def test_removes_already_existing_clip_ids(self, conn):
         """Clips whose IDs are already in the database should be excluded."""
-        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
         existing = make_clip(clip_id="existing_1", view_count=500, youtube_id="yt_abc",
                              created_at=base_time.isoformat())
         insert_clip(conn, existing)
@@ -29,7 +27,7 @@ class TestFilterNewClips:
 
     def test_removes_overlapping_timestamps(self, conn):
         """A clip within 30s of an existing clip from the same streamer is rejected."""
-        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
         existing = make_clip(
             clip_id="old_clip",
             streamer="streamer_x",
@@ -47,7 +45,7 @@ class TestFilterNewClips:
 
     def test_batch_overlap_within_same_run(self, conn):
         """Two new clips in the same batch within 30s should not both pass."""
-        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
         first = make_clip(
             clip_id="batch_1",
             streamer="streamer_x",
@@ -64,7 +62,7 @@ class TestFilterNewClips:
 
     def test_passes_through_genuinely_new_clips(self, conn):
         """A clip with a new ID and no timestamp overlap should pass through."""
-        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
         existing = make_clip(
             clip_id="old_clip",
             streamer="streamer_x",
@@ -83,7 +81,7 @@ class TestFilterNewClips:
 
     def test_failed_clip_can_retry(self, conn):
         """A clip recorded via increment_fail_count should still pass filter_new_clips."""
-        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
         clip = make_clip(
             clip_id="retry_me",
             streamer="streamer_x",
@@ -99,7 +97,7 @@ class TestFilterNewClips:
 
     def test_different_streamer_same_timestamp_passes(self, conn):
         """Overlap detection is scoped to the same streamer."""
-        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
         existing = make_clip(
             clip_id="old_clip",
             streamer="streamer_a",

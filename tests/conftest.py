@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -19,7 +19,7 @@ def conn():
 
 @pytest.fixture
 def now_utc():
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def make_clip(
@@ -34,7 +34,7 @@ def make_clip(
 ) -> Clip:
     """Factory for Clip dataclass instances."""
     if created_at is None:
-        created_at = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        created_at = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
     return Clip(
         id=clip_id,
         url=f"https://clips.twitch.tv/{clip_id}",

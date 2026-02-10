@@ -1,18 +1,15 @@
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from tests.conftest import make_clip
 from src.youtube_uploader import (
-    _truncate_title,
     _choose_template,
     _dedupe_tags,
-    _sanitize_text,
     _render_template,
-    validate_templates,
+    _sanitize_text,
+    _truncate_title,
     upload_short,
-    _VALID_TEMPLATE_KEYS,
+    validate_templates,
 )
+from tests.conftest import make_clip
 
 
 class TestTruncateTitle:

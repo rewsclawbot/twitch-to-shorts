@@ -16,7 +16,7 @@ from src.twitch_client import TwitchClient
 from src.clip_filter import filter_and_rank
 from src.dedup import filter_new_clips
 from src.downloader import download_clip
-from src.video_processor import crop_to_vertical, extract_thumbnail
+from src.video_processor import crop_to_vertical, extract_thumbnail, detect_leading_silence
 from src.youtube_uploader import (
     get_authenticated_service,
     upload_short,
@@ -64,7 +64,12 @@ def load_config(path: str = "config.yaml") -> tuple[PipelineConfig, list[Streame
     with open(path) as f:
         raw = yaml.safe_load(f)
 
-    pipeline = PipelineConfig(**raw.get("pipeline", {}))
+    pipeline_dict = raw.get("pipeline", {})
+    # Bridge captions config into PipelineConfig
+    captions_cfg = raw.get("captions", {})
+    if "captions_enabled" not in pipeline_dict and captions_cfg.get("enabled"):
+        pipeline_dict["captions_enabled"] = captions_cfg["enabled"]
+    pipeline = PipelineConfig(**pipeline_dict)
 
     streamers: list[StreamerConfig] = []
     for s in raw.get("streamers", []):
@@ -110,9 +115,9 @@ def clean_stale_tmp(tmp_dir: str, max_age_hours: int = 24):
     if not os.path.isdir(tmp_dir):
         return
     cutoff = time.time() - max_age_hours * 3600
-    suffixes = (".mp4", ".mp4.tmp", ".part", ".ytdl")
+    suffixes = (".mp4", ".mp4.tmp", ".part", ".ytdl", ".ass", ".wav", ".flac")
     for entry in os.scandir(tmp_dir):
-        if not entry.is_file():
+        if entry.is_symlink() or not entry.is_file():
             continue
         name = entry.name
         if not any(name.endswith(suffix) for suffix in suffixes):
@@ -263,7 +268,8 @@ def run_pipeline(pipeline: PipelineConfig, streamers: list[StreamerConfig], raw_
 def _process_single_clip(clip, yt_service, conn, cfg, streamer, log, dry_run,
                          title_template, title_templates, description_template,
                          description_templates, extra_tags_global,
-                         thumbnail_enabled, thumbnail_samples, thumbnail_width):
+                         thumbnail_enabled, thumbnail_samples, thumbnail_width,
+                         captions_enabled=False):
     """Process a single clip: download, crop, upload, verify, thumbnail.
 
     Returns a tuple of (result, youtube_id) where result is one of:
@@ -293,20 +299,32 @@ def _process_single_clip(clip, yt_service, conn, cfg, streamer, log, dry_run,
         increment_fail_count(conn, clip)
         return "downloaded_fail", None
 
+    # Detect leading silence once — used by both captioner and cropper
+    silence_offset = detect_leading_silence(video_path)
+
+    subtitle_path = None
+    if captions_enabled:
+        from src.captioner import generate_captions
+        subtitle_path = generate_captions(video_path, cfg.tmp_dir, silence_offset=silence_offset)
+        if subtitle_path:
+            log.info("Generated captions for %s", clip.id)
+
     vertical_path = crop_to_vertical(
         video_path, cfg.tmp_dir, cfg.max_clip_duration_seconds,
         facecam=streamer.facecam,
         facecam_mode=streamer.facecam_mode,
+        subtitle_path=subtitle_path,
+        silence_offset=silence_offset,
     )
     thumbnail_path = None
     if not vertical_path:
         increment_fail_count(conn, clip)
-        _cleanup_tmp_files(video_path)
+        _cleanup_tmp_files(video_path, subtitle_path)
         return "processed_fail", None
 
     if dry_run:
         log.info("[DRY RUN] Would upload clip %s: %s", clip.id, clip.title)
-        _cleanup_tmp_files(video_path, vertical_path)
+        _cleanup_tmp_files(video_path, vertical_path, subtitle_path)
         return "dry_run", None
 
     try:
@@ -321,20 +339,20 @@ def _process_single_clip(clip, yt_service, conn, cfg, streamer, log, dry_run,
                                   prebuilt_title=planned_title)
     except QuotaExhaustedError:
         log.warning("YouTube quota exhausted — stopping uploads for this run")
-        _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
+        _cleanup_tmp_files(video_path, vertical_path, thumbnail_path, subtitle_path)
         return "quota_exhausted", None
     except ForbiddenError:
         increment_fail_count(conn, clip)
-        _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
+        _cleanup_tmp_files(video_path, vertical_path, thumbnail_path, subtitle_path)
         return "forbidden", None
     except AuthenticationError:
         log.error("Authentication failed — aborting uploads for this streamer")
-        _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
+        _cleanup_tmp_files(video_path, vertical_path, thumbnail_path, subtitle_path)
         return "auth_error", None
 
     if not youtube_id:
         increment_fail_count(conn, clip)
-        _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
+        _cleanup_tmp_files(video_path, vertical_path, thumbnail_path, subtitle_path)
         return "upload_fail", None
 
     # Record to DB immediately after upload succeeds — before verify/thumbnail.
@@ -353,7 +371,7 @@ def _process_single_clip(clip, yt_service, conn, cfg, streamer, log, dry_run,
         if thumbnail_path:
             set_thumbnail(yt_service, youtube_id, thumbnail_path)
 
-    _cleanup_tmp_files(video_path, vertical_path, thumbnail_path)
+    _cleanup_tmp_files(video_path, vertical_path, thumbnail_path, subtitle_path)
     return "uploaded", youtube_id
 
 
@@ -361,7 +379,7 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
                       client_secrets_file, title_template, title_templates,
                       description_template, description_templates,
                       extra_tags_global, thumbnail_enabled, thumbnail_samples,
-                      thumbnail_width):
+                      thumbnail_width, captions_enabled=False):
     """Process all clips for a single streamer.
 
     Returns a tuple of (fetched, filtered, downloaded, processed, uploaded, failed, quota_exhausted).
@@ -369,6 +387,9 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
     name = streamer.name
     twitch_id = streamer.twitch_id
     channel_key = streamer.youtube_credentials or name
+    # Per-streamer captions override
+    if streamer.captions is not None:
+        captions_enabled = streamer.captions
     log.info("=== Processing streamer: %s ===", name)
 
     fetched = filtered = downloaded = processed = uploaded = failed = 0
@@ -451,6 +472,7 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
             title_template, title_templates, description_template,
             description_templates, extra_tags_global,
             thumbnail_enabled, thumbnail_samples, thumbnail_width,
+            captions_enabled=captions_enabled,
         )
 
         if result == "downloaded_fail":
@@ -538,6 +560,9 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
     thumbnail_samples = int(youtube_cfg.get("thumbnail_samples", 8))
     thumbnail_width = int(youtube_cfg.get("thumbnail_width", 1280))
     extra_tags_global = youtube_cfg.get("extra_tags") or []
+    captions_enabled = cfg.captions_enabled
+    if captions_enabled and not os.environ.get("DEEPGRAM_API_KEY"):
+        log.warning("captions_enabled=True but DEEPGRAM_API_KEY not set — captions will be skipped")
 
     if isinstance(title_templates, str):
         title_templates = [title_templates]
@@ -559,7 +584,7 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
             client_secrets_file, title_template, title_templates,
             description_template, description_templates,
             extra_tags_global, thumbnail_enabled, thumbnail_samples,
-            thumbnail_width,
+            thumbnail_width, captions_enabled=captions_enabled,
         )
         total_fetched += fetched
         total_filtered += filtered

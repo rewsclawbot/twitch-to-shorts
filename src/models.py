@@ -18,6 +18,14 @@ class Clip:
 
 
 @dataclass
+class CaptionWord:
+    word: str
+    start: float
+    end: float
+    confidence: float = 0.0
+
+
+@dataclass
 class FacecamConfig:
     x: float = 0.0
     y: float = 0.75
@@ -36,6 +44,7 @@ class StreamerConfig:
     privacy_status: str = "public"
     category_id: str = "20"
     extra_tags: list[str] | None = None
+    captions: bool | None = None
 
 
 @dataclass
@@ -54,6 +63,7 @@ class PipelineConfig:
     upload_spacing_hours: int = 2
     max_uploads_per_window: int = 1
     analytics_enabled: bool = False
+    captions_enabled: bool = False
     analytics_min_age_hours: int = 48
     analytics_sync_interval_hours: int = 24
     analytics_max_videos_per_run: int = 20
@@ -94,6 +104,8 @@ class PipelineConfig:
                     continue
             if getattr(self, name) < 0:
                 errors.append(f"{name} must be non-negative, got {getattr(self, name)}")
+
+        self.captions_enabled = bool(self.captions_enabled)
 
         if self.age_decay not in ("linear", "log"):
             errors.append(f"age_decay must be 'linear' or 'log', got {self.age_decay!r}")

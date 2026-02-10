@@ -1,18 +1,18 @@
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from src.db import (
-    insert_clip,
-    record_known_clip,
-    increment_fail_count,
-    recent_upload_count,
-    update_streamer_stats,
     clip_overlaps,
     get_clips_for_metrics,
-    update_youtube_metrics,
-    touch_youtube_metrics_sync,
     get_streamer_performance_multiplier,
+    increment_fail_count,
+    insert_clip,
+    recent_upload_count,
+    record_known_clip,
+    touch_youtube_metrics_sync,
+    update_streamer_stats,
+    update_youtube_metrics,
 )
 from tests.conftest import make_clip
 
@@ -122,7 +122,7 @@ class TestRecentUploadCount:
 
     def test_excludes_old_uploads(self, conn):
         """Clips posted more than N hours ago should not be counted."""
-        old_time = (datetime.now(timezone.utc) - timedelta(hours=10)).isoformat()
+        old_time = (datetime.now(UTC) - timedelta(hours=10)).isoformat()
         conn.execute(
             "INSERT INTO clips (clip_id, streamer, posted_at, youtube_id) VALUES (?, ?, ?, ?)",
             ("old_1", "teststreamer", old_time, "yt_old"),
@@ -141,7 +141,7 @@ class TestRecentUploadCount:
 
 class TestUpdateStreamerStats:
     def test_computes_rolling_30d_averages(self, conn):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for i in range(5):
             conn.execute(
                 "INSERT INTO clips (clip_id, streamer, view_count, created_at) VALUES (?, ?, ?, ?)",
@@ -157,7 +157,7 @@ class TestUpdateStreamerStats:
 
 class TestClipOverlaps:
     def test_detects_clips_within_30s_window(self, conn):
-        base = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        base = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
         conn.execute(
             "INSERT INTO clips (clip_id, streamer, created_at) VALUES (?, ?, ?)",
             ("x1", "s", base.isoformat()),
@@ -166,7 +166,7 @@ class TestClipOverlaps:
         assert clip_overlaps(conn, "s", (base + timedelta(seconds=20)).isoformat()) is True
 
     def test_allows_clips_outside_30s_window(self, conn):
-        base = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        base = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
         conn.execute(
             "INSERT INTO clips (clip_id, streamer, created_at) VALUES (?, ?, ?)",
             ("x1", "s", base.isoformat()),
@@ -175,7 +175,7 @@ class TestClipOverlaps:
         assert clip_overlaps(conn, "s", (base + timedelta(seconds=60)).isoformat()) is False
 
     def test_overlap_is_streamer_scoped(self, conn):
-        base = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        base = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
         conn.execute(
             "INSERT INTO clips (clip_id, streamer, created_at) VALUES (?, ?, ?)",
             ("x1", "streamer_a", base.isoformat()),
@@ -186,7 +186,7 @@ class TestClipOverlaps:
 
     def test_exclude_clip_id_ignores_self_match(self, conn):
         """A clip should not overlap with its own DB row."""
-        base = datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        base = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
         conn.execute(
             "INSERT INTO clips (clip_id, streamer, created_at) VALUES (?, ?, ?)",
             ("self1", "s", base.isoformat()),
@@ -200,7 +200,7 @@ class TestClipOverlaps:
 
 class TestYouTubeMetrics:
     def test_get_clips_for_metrics_filters_by_age_and_sync(self, conn):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         recent = (now - timedelta(hours=2)).isoformat()
         old = (now - timedelta(hours=72)).isoformat()
         conn.execute(
@@ -224,7 +224,7 @@ class TestYouTubeMetrics:
         assert "old_synced" not in ids
 
     def test_update_and_touch_metrics(self, conn):
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         conn.execute(
             "INSERT INTO clips (clip_id, streamer, posted_at, youtube_id) VALUES (?, ?, ?, ?)",
             ("c1", "s", now, "yt1"),
@@ -245,7 +245,7 @@ class TestYouTubeMetrics:
         assert row["yt_impressions"] == 1000
         assert row["yt_last_sync"] == now
 
-        later = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        later = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
         touch_youtube_metrics_sync(conn, "yt1", later)
         row = conn.execute("SELECT yt_last_sync FROM clips WHERE youtube_id = 'yt1'").fetchone()
         assert row["yt_last_sync"] == later
@@ -256,7 +256,7 @@ class TestPerformanceMultiplier:
         assert get_streamer_performance_multiplier(conn, "nobody") == 1.0
 
     def test_returns_one_with_fewer_than_three_data_points(self, conn):
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         for i in range(2):
             conn.execute(
                 "INSERT INTO clips (clip_id, streamer, youtube_id, yt_impressions_ctr) VALUES (?, ?, ?, ?)",

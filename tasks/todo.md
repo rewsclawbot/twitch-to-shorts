@@ -1,45 +1,24 @@
 # Active Tasks
 
-## Decision: ffmpeg CPU encode preset
+## Current Sprint
 
-A clip timed out during CPU encoding on GitHub Actions (hit the 300s limit). The pipeline fell through to the next clip and uploaded successfully.
+- [x] **ffmpeg CPU preset → fast** — Resolved. Changed to `-preset fast` unconditionally for CPU encode. Captions add ~10-15% more encode work; `fast` compensates and prevents timeouts.
+- [x] **Burned-in captions** — Deepgram Nova-2 STT → ASS subtitles → ffmpeg burn-in. Default off (`captions.enabled: false`). Graceful degradation on failure.
+- [x] **Roadmap Phase 2 status update** — Marked 2.1-2.4 as DONE, added 2.6 Captions.
 
-**Current setting:** `src/video_processor.py:392` — `-preset medium`
-**Proposed change:** `-preset fast`
+## Backlog: Managed Service Sequence
 
-### Context
-- GitHub Actions runners use CPU-only encoding (`DISABLE_GPU_ENCODE=1`, no CUDA)
-- The timeout is 300s (5 min) at `_run_ffmpeg` line 416
-- Clip `LazyStrangeMagpieCmonBruh-SISzVDIKz5q259Op` timed out at exactly 300s
-- The next clip (`BeautifulObedientDillDansGame-QU1e0B6gKVA9eyLV`) encoded in ~2 min
-- Output is 1080x1920 vertical video, uploaded as YouTube Shorts
-- YouTube re-encodes all uploads to its own formats
+These are documented in the roadmap but NOT being built yet. Phase discipline: don't build Phase 3-5 at Phase 1.
 
-### Option A: Change `-preset medium` to `-preset fast`
-- ~40-50% faster encode times
-- ~5-10% larger files at same CRF 20
-- Visual quality identical (CRF controls quality, preset controls compression search effort)
-- Fewer timeouts, faster pipeline runs overall
-- Tradeoff: slightly larger upload size (e.g., 32MB vs 30MB for a 60s clip)
+1. **Multi-platform distribution** (Phase 3.6) — TikTok + Instagram Reels. Requires TikTok business verification (action item: start verification process).
+2. **Streamer dashboard** (Phase 4.6) — Web UI for performance monitoring + clip management.
+3. **Stripe billing** (Phase 4.7) — Subscription model for managed service.
+4. **Scaling infrastructure** (Phase 5) — Queue-based processing, horizontal scaling.
 
-### Option B: Keep `-preset medium`
-- Current behavior, optimized for compression efficiency
-- Some clips will continue to time out on slower runners
-- The fallthrough mechanism handles it (skip to next clip)
-- Tradeoff: occasional wasted slots when the top-ranked clip is long + runner is slow
+## Action Items
 
-### Option C: Increase timeout from 300s
-- Would let slow encodes finish instead of killing them
-- Risk: worst case 6 clips × higher timeout could approach GitHub Actions 60-min job limit
-- Doesn't improve the normal case, only delays failure for stuck processes
-- Tradeoff: longer wait before fallthrough on genuinely stuck encodes
-
-### What to evaluate
-- Is the quality difference between `medium` and `fast` visible on phone screens at 1080x1920?
-- How often are clips hitting the 300s timeout? (check `gh run list` logs for "timed out")
-- Does the larger file size matter for upload speed on GitHub Actions?
-
----
+- [ ] **TikTok business verification** — Start the verification process now; it takes weeks. Doesn't require any engineering work.
+- [ ] **Enable analytics** — After Phase 1.4 data checkpoint (~2026-02-16), flip `analytics_enabled: true` and start collecting YouTube performance data.
 
 ## Recently Completed
 

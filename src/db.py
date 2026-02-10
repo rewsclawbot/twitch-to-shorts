@@ -1,6 +1,6 @@
-import sqlite3
 import os
-from datetime import datetime, timedelta, timezone
+import sqlite3
+from datetime import UTC, datetime, timedelta
 
 from src.models import Clip
 
@@ -10,7 +10,11 @@ def get_connection(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
-    init_schema(conn)
+    try:
+        init_schema(conn)
+    except Exception:
+        conn.close()
+        raise
     return conn
 
 
@@ -98,7 +102,7 @@ def recent_upload_count(
     channel_key: str | None = None,
 ) -> int:
     """Count clips uploaded for a streamer/channel within the last N hours."""
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    cutoff = (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
     if channel_key:
         row = conn.execute(
             """SELECT COUNT(*) as cnt
@@ -127,7 +131,7 @@ def insert_clip(conn: sqlite3.Connection, clip: Clip):
                title = excluded.title,
                channel_key = excluded.channel_key""",
         (clip.id, clip.streamer, clip.channel_key, clip.title, clip.view_count,
-         clip.created_at, datetime.now(timezone.utc).isoformat(), clip.youtube_id),
+         clip.created_at, datetime.now(UTC).isoformat(), clip.youtube_id),
     )
     conn.commit()
 
@@ -153,14 +157,14 @@ def get_streamer_stats(conn: sqlite3.Connection, streamer: str) -> dict | None:
 
 
 def update_streamer_stats(conn: sqlite3.Connection, streamer: str):
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    cutoff = (datetime.now(UTC) - timedelta(days=30)).isoformat()
     row = conn.execute(
         "SELECT AVG(view_count) as avg_views, COUNT(*) as cnt FROM clips WHERE streamer = ? AND created_at >= ?",
         (streamer, cutoff),
     ).fetchone()
     avg_views = row["avg_views"] or 0
     count = row["cnt"] or 0
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     conn.execute(
         """INSERT INTO streamer_stats (streamer, avg_views_30d, clip_count_30d, last_updated)
            VALUES (?, ?, ?, ?)
@@ -191,7 +195,7 @@ def get_clips_for_metrics(
     sync_interval_hours: int,
     limit: int,
 ) -> list[sqlite3.Row]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     min_posted_at = (now - timedelta(hours=min_age_hours)).isoformat()
     min_sync = (now - timedelta(hours=sync_interval_hours)).isoformat()
     rows = conn.execute(

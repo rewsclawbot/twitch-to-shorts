@@ -5,20 +5,19 @@ pipeline flow with all external services mocked.
 """
 
 import sqlite3
-from datetime import datetime, timezone
-from unittest.mock import patch, MagicMock, ANY
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.db import init_schema, insert_clip, recent_upload_count
-from src.models import Clip, StreamerConfig, PipelineConfig, FacecamConfig
-from src.youtube_uploader import AuthenticationError, QuotaExhaustedError, ForbiddenError
 from main import (
     _process_single_clip,
     _process_streamer,
     _run_pipeline_inner,
     validate_config,
 )
+from src.db import init_schema
+from src.models import Clip, PipelineConfig, StreamerConfig
+from src.youtube_uploader import AuthenticationError, ForbiddenError, QuotaExhaustedError
 
 
 @pytest.fixture

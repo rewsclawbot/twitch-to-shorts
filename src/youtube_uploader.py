@@ -8,13 +8,13 @@ import sys
 import time
 
 import httplib2
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaFileUpload
 
 from src.models import Clip
 
@@ -62,7 +62,7 @@ def get_credentials(client_secrets_file: str, credentials_file: str) -> Credenti
 
     if os.path.exists(credentials_file):
         try:
-            with open(credentials_file, "r", encoding="utf-8") as f:
+            with open(credentials_file, encoding="utf-8") as f:
                 stored_scopes = (json.load(f).get("scopes") or [])
         except (OSError, json.JSONDecodeError):
             stored_scopes = None
@@ -330,10 +330,10 @@ def upload_short(
         return None
 
 
-_uploads_playlist_cache: dict[int, str] = {}
+_uploads_playlist_cache: dict[str, str] = {}
 
 
-def check_channel_for_duplicate(service, clip_title: str, max_results: int = 50) -> str | None:
+def check_channel_for_duplicate(service, clip_title: str, max_results: int = 50, cache_key: str = "default") -> str | None:
     """Check channel's recent uploads for a video with a matching title.
 
     Uses playlistItems.list on the uploads playlist (2 quota units total on first call,
@@ -341,8 +341,7 @@ def check_channel_for_duplicate(service, clip_title: str, max_results: int = 50)
     Returns the youtube_id if a duplicate is found, None otherwise.
     """
     try:
-        service_id = id(service)
-        uploads_playlist = _uploads_playlist_cache.get(service_id)
+        uploads_playlist = _uploads_playlist_cache.get(cache_key)
         if uploads_playlist is None:
             ch_resp = service.channels().list(part="contentDetails", mine=True).execute()
             items = ch_resp.get("items", [])
@@ -350,7 +349,7 @@ def check_channel_for_duplicate(service, clip_title: str, max_results: int = 50)
                 log.warning("No channel found for authenticated user")
                 return None
             uploads_playlist = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
-            _uploads_playlist_cache[service_id] = uploads_playlist
+            _uploads_playlist_cache[cache_key] = uploads_playlist
 
         page_token = None
         checked = 0

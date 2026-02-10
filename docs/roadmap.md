@@ -62,13 +62,14 @@ Most Shorts uploaded in the last 2-3 days have 3-8 views — normal for new cont
 **Entry criteria:** Phase 1.4 shows consistent traction (500+ avg views).
 **Eng work:** Small, targeted.
 
-| # | Milestone | Why it matters | Eng lift |
-|---|-----------|---------------|----------|
-| 2.1 | Thumbnail generation | Thumbnails are the #1 CTR driver on YouTube. Auto-extract peak-action frame (you already compute YDIF). Huge ROI for small work | Small — extract frame at max YDIF, save as jpg, pass to upload API |
-| 2.2 | Title optimization | Twitch clip titles are often garbage. Test a template like "[Streamer] [action] in [game]" or let the clip title through — A/B compare manually | Tiny — string formatting |
-| 2.3 | Fail-count guard | Stop wasting upload slots retrying broken clips forever. `fail_count < 3` in dedup query | 1 line |
-| 2.4 | Basic YouTube data pull | Don't need the full analytics API yet. Just pull view count per video after 48hrs, store in DB. Tells you which clips perform | Small — 1 API call per video, new DB column |
-| 2.5 | Scoring tuning | Use 2.4 data to manually adjust `velocity_weight`, `min_view_count`. Not ML — just look at what worked and tweak | Config changes informed by data |
+| # | Milestone | Why it matters | Eng lift | Status |
+|---|-----------|---------------|----------|--------|
+| 2.1 | Thumbnail generation | Thumbnails are the #1 CTR driver on YouTube. Auto-extract peak-action frame (YDIF). | Small — extract frame at max YDIF, save as jpg, pass to upload API | DONE |
+| 2.2 | Title optimization | Twitch clip titles are often garbage. A/B test templates via deterministic md5 hash | Tiny — string formatting | DONE |
+| 2.3 | Fail-count guard | Stop wasting upload slots retrying broken clips forever. `fail_count < 3` in dedup query | 1 line | DONE |
+| 2.4 | Basic YouTube data pull | Pull view count per video after 48hrs, store in DB. Tells you which clips perform | Small — 1 API call per video, new DB column | DONE (analytics_enabled: false) |
+| 2.5 | Scoring tuning | Use 2.4 data to manually adjust `velocity_weight`, `min_view_count` | Config changes informed by data | PENDING — needs analytics data |
+| 2.6 | Burned-in captions | Captions boost watch time and accessibility. STT via Deepgram Nova-2, ASS subtitles burned in during ffmpeg encode | Small — captioner module, config flag | DONE (default off) |
 
 **Decision gate after 2.5 (expect ~4-6 weeks in Phase 2):**
 - **Channel growing, some Shorts hitting 5K-10K+ views** → Algorithm is learning. Move to Phase 3.
@@ -90,6 +91,7 @@ Most Shorts uploaded in the last 2-3 days have 3-8 views — normal for new cont
 | 3.3 | Onboard streamer #3 | Same. Different game/audience to test breadth | Same |
 | 3.4 | Per-streamer scoring tuning | Each streamer's content performs differently. Use Phase 2.4 data per channel | Config per streamer (already supported) |
 | 3.5 | Quota check | 3 channels × 6 uploads/day = 18 uploads = ~1,800 quota units. Well under 10K free. Confirm in practice | Monitor only |
+| 3.6 | Multi-platform distribution | TikTok + Instagram Reels uploads from same clips. Requires TikTok business verification | Medium — new uploader modules, platform-specific formatting |
 
 **Decision gate after 3.5:**
 - **Multiple channels growing, total view velocity increasing** → Move to Phase 4.
@@ -110,6 +112,8 @@ Most Shorts uploaded in the last 2-3 days have 3-8 views — normal for new cont
 | 4.3 | Long-form weekly compilation | 8-10 min "Best of the Week" video. Standard YouTube CPM ($3-8) vs Shorts CPM ($0.04-0.08). This is where real money is | Medium — ffmpeg concat, transitions, credit overlays |
 | 4.4 | Hit YPP on first channel | 1,000 subs + either 10M Shorts views (90 days) or 4,000 watch hours (long-form, 12 months) | Operational — keep uploading, optimize |
 | 4.5 | First ad revenue dollar | Prove the unit economics: cost per upload vs revenue per upload | Milestone, not engineering |
+| 4.6 | Streamer dashboard | Web dashboard for streamers to view performance, manage clips, configure preferences | Large — new web app, auth, API |
+| 4.7 | Stripe billing | Subscription billing for managed service. Revenue share model | Medium — Stripe integration, billing logic |
 
 ---
 

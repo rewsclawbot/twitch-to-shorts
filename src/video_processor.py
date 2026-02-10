@@ -4,17 +4,10 @@ import os
 import re
 import subprocess
 
-from src.media_utils import FFMPEG, FFPROBE
+from src.media_utils import FFMPEG, FFPROBE, is_valid_video, safe_remove
 from src.models import FacecamConfig
 
 log = logging.getLogger(__name__)
-
-
-def _remove_file(path: str):
-    try:
-        os.remove(path)
-    except OSError:
-        pass
 
 
 def _probe_video_info(path: str) -> tuple[float | None, tuple[int, int] | None]:
@@ -57,28 +50,6 @@ def _get_duration(path: str) -> float | None:
     """Get video duration. Used by extract_thumbnail which doesn't need dimensions."""
     duration, _ = _probe_video_info(path)
     return duration
-
-
-def _sample_ydif(input_path: str, timestamp: float) -> float:
-    cmd = [
-        FFMPEG, "-ss", f"{timestamp:.2f}", "-i", input_path,
-        "-vf", "signalstats,metadata=print",
-        "-frames:v", "1",
-        "-f", "null", "-",
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
-        values: list[float] = []
-        for line in result.stderr.splitlines():
-            if "signalstats.YDIF=" in line:
-                try:
-                    values.append(float(line.split("YDIF=")[1]))
-                except (ValueError, IndexError):
-                    pass
-        return max(values) if values else 0.0
-    except Exception as e:
-        log.warning("Thumbnail motion sampling failed at %.2fs: %s", timestamp, e)
-        return 0.0
 
 
 def _batch_sample_ydif(video_path: str, timestamps: list[float]) -> list[float]:
@@ -164,16 +135,16 @@ def extract_thumbnail(
         subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=30)
     except Exception as e:
         log.warning("Thumbnail extraction failed for %s: %s", clip_id, e)
-        _remove_file(output_path)
+        safe_remove(output_path)
         return None
 
     if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-        _remove_file(output_path)
+        safe_remove(output_path)
         return None
     return output_path
 
 
-def _detect_leading_silence(input_path: str, threshold_db: float = -30, min_duration: float = 0.5) -> float:
+def detect_leading_silence(input_path: str, threshold_db: float = -30, min_duration: float = 0.5) -> float:
     """Return duration of leading silence in seconds (0.0 if none). Capped at 5s."""
     cmd = [
         FFMPEG, "-t", "6", "-i", input_path,
@@ -197,7 +168,9 @@ def _detect_leading_silence(input_path: str, threshold_db: float = -30, min_dura
 
 def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
                      facecam: FacecamConfig | None = None,
-                     facecam_mode: str = "auto") -> str | None:
+                     facecam_mode: str = "auto",
+                     subtitle_path: str | None = None,
+                     silence_offset: float | None = None) -> str | None:
     """Crop a 16:9 video to 9:16 vertical (1080x1920) with facecam+gameplay layout.
 
     If facecam config is provided, output is split: top 20% facecam, bottom 80% gameplay.
@@ -207,8 +180,11 @@ def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
     output_path = os.path.join(tmp_dir, f"{clip_id}_vertical.mp4")
 
     if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-        log.info("Vertical clip already exists: %s", output_path)
-        return output_path
+        if is_valid_video(output_path):
+            log.info("Vertical clip already exists: %s", output_path)
+            return output_path
+        else:
+            log.warning("Cached output %s is invalid, re-processing", output_path)
 
     # Single probe for both duration and dimensions
     duration, dims = _probe_video_info(input_path)
@@ -218,9 +194,12 @@ def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
         log.info("Skipping clip %s: duration %.1fs exceeds %ds limit", clip_id, duration, max_duration)
         return None
 
-    silence_offset = _detect_leading_silence(input_path)
-    if silence_offset > 0:
-        log.info("Trimming %.2fs leading silence from %s", silence_offset, clip_id)
+    if silence_offset is not None:
+        trim_start = silence_offset
+    else:
+        trim_start = detect_leading_silence(input_path)
+    if trim_start > 0:
+        log.info("Trimming %.2fs leading silence from %s", trim_start, clip_id)
 
     mode = (facecam_mode or "auto").lower()
     if mode not in ("auto", "always", "off"):
@@ -256,9 +235,9 @@ def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
     skip_gpu = os.environ.get("DISABLE_GPU_ENCODE", "").lower() in ("1", "true", "yes")
 
     # Try GPU encode first (if not disabled), fall back to CPU
-    if not skip_gpu and _run_ffmpeg(input_path, output_path, vf, clip_id, gpu=True, ss=silence_offset, loudness=loudness):
+    if not skip_gpu and _run_ffmpeg(input_path, output_path, vf, clip_id, gpu=True, ss=trim_start, loudness=loudness, subtitle_path=subtitle_path):
         return output_path
-    if _run_ffmpeg(input_path, output_path, vf, clip_id, gpu=False, ss=silence_offset, loudness=loudness):
+    if _run_ffmpeg(input_path, output_path, vf, clip_id, gpu=False, ss=trim_start, loudness=loudness, subtitle_path=subtitle_path):
         return output_path
 
     return None
@@ -291,7 +270,7 @@ def _has_facecam(input_path: str, facecam: FacecamConfig, clip_id: str, duration
     filters = []
     for i in range(len(seek_times)):
         filters.append(f"[{i}:v]{crop_stats},trim=end_frame=5[v{i}]")
-    filters.append(f"[v0][v1][v2]concat=n=3:v=1:a=0[out]")
+    filters.append("[v0][v1][v2]concat=n=3:v=1:a=0[out]")
     cmd += ["-filter_complex", ";".join(filters), "-map", "[out]", "-f", "null", "-"]
 
     ydif_values = []
@@ -361,9 +340,19 @@ def _build_composite_filter(facecam: FacecamConfig) -> str:
     return f"{game};{cam};[game][cam]overlay=(W-w)/2:0[out]"
 
 
+def _escape_subtitle_path(path: str) -> str:
+    """Escape a file path for ffmpeg's subtitles/ass filter (Windows-compatible)."""
+    escaped = str(path).replace("\\", "/").replace(":", "\\:")
+    escaped = escaped.replace("'", "'\\\\\\''")  # escape single quotes for ffmpeg filter
+    escaped = escaped.replace(";", "\\;")
+    escaped = escaped.replace("[", "\\[").replace("]", "\\]")
+    return escaped
+
+
 def _run_ffmpeg(input_path: str, output_path: str, vf: str,
                 clip_id: str, gpu: bool, ss: float = 0.0,
-                loudness: dict | None = None) -> bool:
+                loudness: dict | None = None,
+                subtitle_path: str | None = None) -> bool:
     """Run ffmpeg with given filter. Returns True on success.
 
     Writes to a temp file and atomically renames on success to prevent
@@ -386,13 +375,22 @@ def _run_ffmpeg(input_path: str, output_path: str, vf: str,
     else:
         cmd += ["-vf", vf]
 
+    # Inject subtitle filter if captions are provided
+    if subtitle_path:
+        escaped = _escape_subtitle_path(subtitle_path)
+        if "[out]" in vf:
+            # Composite mode: rename [out] to [tmp], append subtitle filter
+            idx = cmd.index("-filter_complex")
+            cmd[idx + 1] = cmd[idx + 1].replace("[out]", "[tmp]") + f";[tmp]ass='{escaped}'[out]"
+        else:
+            # Simple mode: append to -vf value
+            idx = cmd.index("-vf")
+            cmd[idx + 1] = cmd[idx + 1] + f",ass='{escaped}'"
+
     if gpu:
         cmd += ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"]
     else:
-        # Use a faster CPU preset on CI to reduce timeouts.
-        ci_env = os.environ.get("CI", "").lower() in ("1", "true", "yes")
-        disable_gpu = os.environ.get("DISABLE_GPU_ENCODE", "").lower() in ("1", "true", "yes")
-        cpu_preset = "fast" if (ci_env or disable_gpu) else "medium"
+        cpu_preset = "fast"
         cmd += ["-c:v", "libx264", "-crf", "20", "-preset", cpu_preset]
 
     # Two-pass loudnorm: use measured stats if available, else fall back to single-pass
@@ -422,25 +420,25 @@ def _run_ffmpeg(input_path: str, output_path: str, vf: str,
             proc.kill()
             proc.wait()
             log.error("FFmpeg %s timed out for %s", label, clip_id)
-            _remove_file(tmp_output)
+            safe_remove(tmp_output)
             return False
 
         if proc.returncode != 0:
             log.warning("FFmpeg %s failed for %s: %s", label, clip_id,
                         stderr_bytes.decode(errors="replace")[-500:])
-            _remove_file(tmp_output)
+            safe_remove(tmp_output)
             return False
     except Exception as e:
         log.error("FFmpeg %s error for %s: %s", label, clip_id, e)
         if proc and proc.poll() is None:
             proc.kill()
             proc.wait()
-        _remove_file(tmp_output)
+        safe_remove(tmp_output)
         return False
 
     if not os.path.exists(tmp_output) or os.path.getsize(tmp_output) == 0:
         log.error("FFmpeg %s produced empty output for %s", label, clip_id)
-        _remove_file(tmp_output)
+        safe_remove(tmp_output)
         return False
 
     os.replace(tmp_output, output_path)

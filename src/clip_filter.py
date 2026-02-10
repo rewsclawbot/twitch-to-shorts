@@ -1,6 +1,6 @@
 import logging
 import math
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from src.db import get_streamer_performance_multiplier
 from src.models import Clip
@@ -44,7 +44,7 @@ def compute_score(
     title_quality_weight: float = 0.0,
 ) -> float:
     created = datetime.fromisoformat(clip.created_at)
-    age_hours = max((datetime.now(timezone.utc) - created).total_seconds() / 3600, 0.1)
+    age_hours = max((datetime.now(UTC) - created).total_seconds() / 3600, 0.1)
     if age_decay == "log":
         age_term = max(math.log1p(age_hours), 0.1)
     else:

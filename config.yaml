@@ -61,3 +61,7 @@ pipeline:
   analytics_min_age_hours: 48
   analytics_sync_interval_hours: 24
   analytics_max_videos_per_run: 20
+
+# Captions (burned-in subtitles — requires DEEPGRAM_API_KEY env var)
+# captions:
+#   enabled: false

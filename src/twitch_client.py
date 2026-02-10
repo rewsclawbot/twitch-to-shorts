@@ -1,6 +1,7 @@
 import logging
+import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import requests
 
@@ -95,8 +96,8 @@ class TwitchClient:
 
     def fetch_clips(self, broadcaster_id: str, lookback_hours: int = 24, max_clips: int = 500) -> list[Clip]:
         """Fetch all clips for a broadcaster in the given time window."""
-        started_at = (datetime.now(timezone.utc) - timedelta(hours=lookback_hours)).isoformat()
-        ended_at = datetime.now(timezone.utc).isoformat()
+        started_at = (datetime.now(UTC) - timedelta(hours=lookback_hours)).isoformat()
+        ended_at = datetime.now(UTC).isoformat()
 
         clips: list[Clip] = []
         cursor = None
@@ -115,9 +116,13 @@ class TwitchClient:
 
             data = resp.json()
             for c in data.get("data", []):
+                clip_id = c.get("id", "")
+                if not re.match(r'^[a-zA-Z0-9_-]+$', clip_id):
+                    log.warning("Skipping clip with invalid ID: %r", clip_id)
+                    continue
                 try:
                     clip = Clip(
-                        id=c["id"],
+                        id=clip_id,
                         url=c["url"],
                         title=c["title"],
                         view_count=c["view_count"],

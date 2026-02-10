@@ -1,12 +1,10 @@
 """Tests for subprocess safety: verify no command injection via adversarial filenames."""
 
-import subprocess
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from tests.conftest import make_clip
-
 
 # Adversarial filenames containing shell metacharacters
 ADVERSARIAL_FILENAMES = [
@@ -62,15 +60,15 @@ class TestVideoProcessorSubprocessSafety:
 
     @pytest.mark.parametrize("filename", ADVERSARIAL_FILENAMES)
     @patch("src.video_processor.subprocess.run")
-    def test_detect_leading_silence_list_args(self, mock_run, filename):
-        from src.video_processor import _detect_leading_silence
+    def testdetect_leading_silence_list_args(self, mock_run, filename):
+        from src.video_processor import detect_leading_silence
 
         mock_run.return_value = MagicMock(
             stderr="[silencedetect] silence_start: 0\n[silencedetect] silence_end: 1.5",
             returncode=0,
         )
 
-        _detect_leading_silence(filename)
+        detect_leading_silence(filename)
 
         call_args = mock_run.call_args
         cmd = call_args[0][0]
@@ -97,7 +95,7 @@ class TestVideoProcessorSubprocessSafety:
     @pytest.mark.parametrize("filename", ADVERSARIAL_FILENAMES)
     @patch("src.video_processor.subprocess.Popen")
     @patch("src.video_processor._measure_loudness", return_value=None)
-    @patch("src.video_processor._detect_leading_silence", return_value=0.0)
+    @patch("src.video_processor.detect_leading_silence", return_value=0.0)
     @patch("src.video_processor._probe_video_info", return_value=(30.0, (1920, 1080)))
     @patch("src.video_processor.os.path.exists")
     @patch("src.video_processor.os.path.getsize", return_value=1000)

@@ -2,6 +2,7 @@ import logging
 import os
 import sqlite3
 from datetime import datetime
+
 from src.db import clip_overlaps
 from src.models import Clip
 
