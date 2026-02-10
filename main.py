@@ -23,6 +23,7 @@ from src.db import (  # noqa: E402
     touch_youtube_metrics_sync,
     update_streamer_stats,
     update_youtube_metrics,
+    update_youtube_reach_metrics,
 )
 from src.dedup import filter_new_clips  # noqa: E402
 from src.downloader import download_clip  # noqa: E402
@@ -30,6 +31,7 @@ from src.models import FacecamConfig, PipelineConfig, StreamerConfig  # noqa: E4
 from src.twitch_client import TwitchClient  # noqa: E402
 from src.video_processor import crop_to_vertical, detect_leading_silence, extract_thumbnail  # noqa: E402
 from src.youtube_analytics import fetch_video_metrics, get_analytics_service  # noqa: E402
+from src.youtube_reporting import fetch_reach_metrics, get_reporting_service  # noqa: E402
 from src.youtube_uploader import (  # noqa: E402
     AuthenticationError,
     ForbiddenError,
@@ -159,20 +161,61 @@ def _sync_streamer_metrics(
         return 0
 
     end_date = datetime.now(UTC).date().isoformat()
-    synced = 0
+    synced_ids: set[str] = set()
+    pending_reach: dict[str, str] = {}
+    pending_touch: set[str] = set()
     for row in rows:
         youtube_id = row["youtube_id"]
         posted_at = row["posted_at"]
         if not youtube_id or not posted_at:
             continue
         start_date = datetime.fromisoformat(posted_at).date().isoformat()
-        metrics = fetch_video_metrics(service, youtube_id, start_date, end_date)
+        try:
+            metrics = fetch_video_metrics(service, youtube_id, start_date, end_date)
+        except Exception:
+            log.warning("Analytics metrics failed for %s", youtube_id, exc_info=True)
+            metrics = None
         if metrics:
             update_youtube_metrics(conn, youtube_id, metrics)
-            synced += 1
+            synced_ids.add(youtube_id)
+            if metrics.get("yt_impressions") is None or metrics.get("yt_impressions_ctr") is None:
+                pending_reach[youtube_id] = start_date
         else:
-            touch_youtube_metrics_sync(conn, youtube_id, datetime.now(UTC).isoformat())
-    return synced
+            pending_reach[youtube_id] = start_date
+            pending_touch.add(youtube_id)
+
+    if pending_reach:
+        reach_metrics: dict[str, dict] = {}
+        try:
+            reporting_service = get_reporting_service(client_secrets_file, credentials_file)
+            min_start_date = min(pending_reach.values())
+            reach_metrics = fetch_reach_metrics(
+                reporting_service,
+                set(pending_reach.keys()),
+                min_start_date,
+                end_date,
+            )
+            if reach_metrics:
+                log.info("Reporting reach metrics found for %d videos", len(reach_metrics))
+        except Exception:
+            log.warning("Reporting API reach sync failed for %s", streamer, exc_info=True)
+
+        now = datetime.now(UTC).isoformat()
+        for youtube_id, data in reach_metrics.items():
+            update_youtube_reach_metrics(
+                conn,
+                youtube_id,
+                data.get("yt_impressions"),
+                data.get("yt_impressions_ctr"),
+                now,
+            )
+            synced_ids.add(youtube_id)
+            pending_touch.discard(youtube_id)
+
+        for youtube_id in pending_touch:
+            touch_youtube_metrics_sync(conn, youtube_id, now)
+
+    return len(synced_ids)
 
 
 def _pid_is_running(pid: int) -> bool:

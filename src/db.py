@@ -237,6 +237,24 @@ def update_youtube_metrics(conn: sqlite3.Connection, youtube_id: str, metrics: d
     conn.commit()
 
 
+def update_youtube_reach_metrics(
+    conn: sqlite3.Connection,
+    youtube_id: str,
+    impressions: int | None,
+    impressions_ctr: float | None,
+    synced_at: str,
+):
+    conn.execute(
+        """UPDATE clips
+           SET yt_impressions = ?,
+               yt_impressions_ctr = ?,
+               yt_last_sync = ?
+           WHERE youtube_id = ?""",
+        (impressions, impressions_ctr, synced_at, youtube_id),
+    )
+    conn.commit()
+
+
 def touch_youtube_metrics_sync(conn: sqlite3.Connection, youtube_id: str, synced_at: str):
     conn.execute(
         "UPDATE clips SET yt_last_sync = ? WHERE youtube_id = ?",
