@@ -1,3 +1,4 @@
+import contextlib
 import json
 import logging
 import os
@@ -79,10 +80,8 @@ def _batch_sample_ydif(video_path: str, timestamps: list[float]) -> list[float]:
         all_ydif: list[float] = []
         for line in result.stderr.splitlines():
             if "signalstats.YDIF=" in line:
-                try:
+                with contextlib.suppress(ValueError, IndexError):
                     all_ydif.append(float(line.split("YDIF=")[1]))
-                except (ValueError, IndexError):
-                    pass
         # With 1 frame per input, we expect 1 YDIF per timestamp
         # If we got fewer, pad with 0.0; if more (shouldn't happen), take first n
         scores = []
@@ -119,7 +118,7 @@ def extract_thumbnail(
     scores = _batch_sample_ydif(input_path, timestamps)
     best_ts = timestamps[0]
     best_score = -1.0
-    for ts, score in zip(timestamps, scores):
+    for ts, score in zip(timestamps, scores, strict=False):
         if score > best_score:
             best_score = score
             best_ts = ts
@@ -194,10 +193,7 @@ def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
         log.info("Skipping clip %s: duration %.1fs exceeds %ds limit", clip_id, duration, max_duration)
         return None
 
-    if silence_offset is not None:
-        trim_start = silence_offset
-    else:
-        trim_start = detect_leading_silence(input_path)
+    trim_start = silence_offset if silence_offset is not None else detect_leading_silence(input_path)
     if trim_start > 0:
         log.info("Trimming %.2fs leading silence from %s", trim_start, clip_id)
 
@@ -278,10 +274,8 @@ def _has_facecam(input_path: str, facecam: FacecamConfig, clip_id: str, duration
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         for line in result.stderr.splitlines():
             if "signalstats.YDIF=" in line:
-                try:
+                with contextlib.suppress(ValueError, IndexError):
                     ydif_values.append(float(line.split("YDIF=")[1]))
-                except (ValueError, IndexError):
-                    pass
     except subprocess.TimeoutExpired:
         log.warning("Facecam detection timed out for %s", clip_id)
     except Exception as e:

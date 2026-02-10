@@ -262,8 +262,7 @@ class TestTranscribeClip:
 
     def test_missing_deepgram_sdk_returns_none(self):
         """When deepgram-sdk is not installed, transcribe returns None."""
-        with patch("src.captioner.DeepgramClient", None):
-            with patch.dict("os.environ", {"DEEPGRAM_API_KEY": "test-key"}):
+        with patch("src.captioner.DeepgramClient", None), patch.dict("os.environ", {"DEEPGRAM_API_KEY": "test-key"}):
                 result = transcribe_clip("test.mp4", "/tmp")
                 assert result is None
 

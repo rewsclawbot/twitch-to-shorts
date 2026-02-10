@@ -56,7 +56,7 @@ def main():
 
         src = os.path.join(tmp, "clips.db")
         if not os.path.exists(src):
-            print(f"Downloaded artifact missing clips.db", file=sys.stderr)
+            print("Downloaded artifact missing clips.db", file=sys.stderr)
             sys.exit(1)
 
         os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)

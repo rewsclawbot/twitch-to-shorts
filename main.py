@@ -1,43 +1,44 @@
 import argparse
+import contextlib
 import logging
 import logging.handlers
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import yaml
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from src.models import Clip, FacecamConfig, StreamerConfig, PipelineConfig
-from src.twitch_client import TwitchClient
-from src.clip_filter import filter_and_rank
-from src.dedup import filter_new_clips
-from src.downloader import download_clip
-from src.video_processor import crop_to_vertical, extract_thumbnail, detect_leading_silence
-from src.youtube_uploader import (
-    get_authenticated_service,
-    upload_short,
-    build_upload_title,
-    set_thumbnail,
-    check_channel_for_duplicate,
+from src.clip_filter import filter_and_rank  # noqa: E402
+from src.db import (  # noqa: E402
+    get_clips_for_metrics,
+    get_connection,
+    increment_fail_count,
+    insert_clip,
+    recent_upload_count,
+    record_known_clip,
+    touch_youtube_metrics_sync,
+    update_streamer_stats,
+    update_youtube_metrics,
+)
+from src.dedup import filter_new_clips  # noqa: E402
+from src.downloader import download_clip  # noqa: E402
+from src.models import FacecamConfig, PipelineConfig, StreamerConfig  # noqa: E402
+from src.twitch_client import TwitchClient  # noqa: E402
+from src.video_processor import crop_to_vertical, detect_leading_silence, extract_thumbnail  # noqa: E402
+from src.youtube_analytics import fetch_video_metrics, get_analytics_service  # noqa: E402
+from src.youtube_uploader import (  # noqa: E402
     AuthenticationError,
     ForbiddenError,
     QuotaExhaustedError,
-)
-from src.youtube_analytics import get_analytics_service, fetch_video_metrics
-from src.db import (
-    get_connection,
-    insert_clip,
-    record_known_clip,
-    update_streamer_stats,
-    recent_upload_count,
-    increment_fail_count,
-    get_clips_for_metrics,
-    update_youtube_metrics,
-    touch_youtube_metrics_sync,
+    build_upload_title,
+    check_channel_for_duplicate,
+    get_authenticated_service,
+    set_thumbnail,
+    upload_short,
 )
 
 LOCK_FILE = os.path.join("data", "pipeline.lock")
@@ -157,7 +158,7 @@ def _sync_streamer_metrics(
     if not rows:
         return 0
 
-    end_date = datetime.now(timezone.utc).date().isoformat()
+    end_date = datetime.now(UTC).date().isoformat()
     synced = 0
     for row in rows:
         youtube_id = row["youtube_id"]
@@ -170,7 +171,7 @@ def _sync_streamer_metrics(
             update_youtube_metrics(conn, youtube_id, metrics)
             synced += 1
         else:
-            touch_youtube_metrics_sync(conn, youtube_id, datetime.now(timezone.utc).isoformat())
+            touch_youtube_metrics_sync(conn, youtube_id, datetime.now(UTC).isoformat())
     return synced
 
 
@@ -245,10 +246,8 @@ def acquire_lock() -> bool:
 
 
 def release_lock():
-    try:
+    with contextlib.suppress(OSError):
         os.remove(LOCK_FILE)
-    except OSError:
-        pass
 
 
 def run_pipeline(pipeline: PipelineConfig, streamers: list[StreamerConfig], raw_config: dict, dry_run: bool = False):

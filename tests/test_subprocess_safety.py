@@ -114,7 +114,7 @@ class TestVideoProcessorSubprocessSafety:
         # exists: output_path (False), tmp_output (True)
         mock_exists.side_effect = [False, True]
 
-        result = crop_to_vertical(filename, "/tmp/test", facecam_mode="off")
+        crop_to_vertical(filename, "/tmp/test", facecam_mode="off")
 
         call_args = mock_popen.call_args
         cmd = call_args[0][0]

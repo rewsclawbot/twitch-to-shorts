@@ -38,7 +38,7 @@ def _parse_report(response: dict) -> dict | None:
     if not headers:
         return None
     row = rows[0]
-    return dict(zip(headers, row))
+    return dict(zip(headers, row, strict=False))
 
 
 def fetch_video_metrics(service, video_id: str, start_date: str, end_date: str) -> dict | None:

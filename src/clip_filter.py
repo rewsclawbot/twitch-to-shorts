@@ -45,10 +45,7 @@ def compute_score(
 ) -> float:
     created = datetime.fromisoformat(clip.created_at)
     age_hours = max((datetime.now(UTC) - created).total_seconds() / 3600, 0.1)
-    if age_decay == "log":
-        age_term = max(math.log1p(age_hours), 0.1)
-    else:
-        age_term = age_hours
+    age_term = max(math.log1p(age_hours), 0.1) if age_decay == "log" else age_hours
     views = _transform_views(clip.view_count, view_transform)
     velocity = views / age_term
     duration = max(clip.duration, 1)

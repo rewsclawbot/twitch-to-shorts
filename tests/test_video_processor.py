@@ -208,7 +208,7 @@ class TestGpuCpuFallback:
         # GPU fails, CPU succeeds
         mock_ffmpeg.side_effect = [False, True]
 
-        result = crop_to_vertical("test.mp4", "/tmp/test", facecam_mode="off")
+        crop_to_vertical("test.mp4", "/tmp/test", facecam_mode="off")
 
         assert mock_ffmpeg.call_count == 2
         # First call: gpu=True, second call: gpu=False

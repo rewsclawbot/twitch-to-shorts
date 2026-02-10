@@ -256,7 +256,6 @@ class TestPerformanceMultiplier:
         assert get_streamer_performance_multiplier(conn, "nobody") == 1.0
 
     def test_returns_one_with_fewer_than_three_data_points(self, conn):
-        now = datetime.now(UTC).isoformat()
         for i in range(2):
             conn.execute(
                 "INSERT INTO clips (clip_id, streamer, youtube_id, yt_impressions_ctr) VALUES (?, ?, ?, ?)",

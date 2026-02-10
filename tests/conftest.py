@@ -17,11 +17,6 @@ def conn():
     c.close()
 
 
-@pytest.fixture
-def now_utc():
-    return datetime.now(UTC)
-
-
 def make_clip(
     clip_id="clip_1",
     streamer="teststreamer",

@@ -118,7 +118,7 @@ class TestProcessSingleClip:
     @patch("main.build_upload_title", return_value="Test Title")
     def test_duplicate_detected(self, mock_title, mock_dedup,
                                  clip, yt_service, conn, cfg, streamer, log):
-        result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
+        result, _yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
         assert result == "duplicate"
         assert clip.youtube_id == "existing_yt_id"
 
@@ -130,7 +130,7 @@ class TestProcessSingleClip:
     @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
     def test_quota_exhausted(self, mock_dl, mock_crop, mock_title, mock_dedup, mock_upload,
                               mock_clean, clip, yt_service, conn, cfg, streamer, log):
-        result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
+        result, _yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
         assert result == "quota_exhausted"
 
     @patch("main._cleanup_tmp_files")
@@ -141,7 +141,7 @@ class TestProcessSingleClip:
     @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
     def test_forbidden(self, mock_dl, mock_crop, mock_title, mock_dedup, mock_upload,
                         mock_clean, clip, yt_service, conn, cfg, streamer, log):
-        result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
+        result, _yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
         assert result == "forbidden"
 
     @patch("main._cleanup_tmp_files")
@@ -164,7 +164,7 @@ class TestProcessSingleClip:
     @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
     def test_upload_fail(self, mock_dl, mock_crop, mock_title, mock_dedup, mock_upload,
                           mock_clean, clip, yt_service, conn, cfg, streamer, log):
-        result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
+        result, _yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
         assert result == "upload_fail"
 
     @patch("main._cleanup_tmp_files")
@@ -213,7 +213,7 @@ class TestProcessSingleClip:
     def test_thumbnail_extraction_on_success(self, mock_dl, mock_crop, mock_title, mock_dedup,
                                               mock_upload, mock_thumb, mock_set_thumb,
                                               mock_clean, clip, yt_service, conn, cfg, streamer, log):
-        result, yt_id = _process_single_clip(
+        result, _yt_id = _process_single_clip(
             clip, yt_service, conn, cfg, streamer, log, False,
             title_template=None, title_templates=None,
             description_template=None, description_templates=None,
@@ -257,7 +257,7 @@ class TestProcessStreamer:
             streamer, twitch, cfg, conn, log, False,
             "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
         )
-        fetched, filtered, downloaded, processed, uploaded, failed, quota_exhausted = result
+        _fetched, _filtered, _downloaded, _processed, uploaded, _failed, _quota_exhausted = result
         assert uploaded == 0  # No uploads due to spacing
 
     @patch("main.update_streamer_stats")
@@ -430,7 +430,7 @@ class TestProcessStreamer:
             streamer, twitch, cfg, conn, log, False,
             "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
         )
-        fetched, filtered, downloaded, processed, uploaded, failed, _ = result
+        _fetched, _filtered, _downloaded, _processed, uploaded, _failed, _ = result
         assert uploaded == 0
         # get_game_names should NOT have been called since uploads_remaining == 0
         twitch.get_game_names.assert_not_called()
@@ -479,7 +479,7 @@ class TestProcessStreamer:
             streamer, twitch, cfg, conn, log, False,
             "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
         )
-        fetched, filtered, downloaded, processed, uploaded, failed, quota = result
+        fetched, _filtered, _downloaded, _processed, uploaded, _failed, quota = result
         assert fetched == 0
         assert uploaded == 0
         assert quota is False
