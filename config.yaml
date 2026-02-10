@@ -1,5 +1,5 @@
 twitch:
-  # WARNING: Do NOT put client_id or client_secret here — this file is committed to git.
+  # WARNING: Do NOT put client_id or client_secret here -- this file is committed to git.
   # Set TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET as environment variables only.
 
 youtube:
@@ -57,11 +57,16 @@ pipeline:
   upload_spacing_hours: 2
   max_uploads_per_window: 1
   # Analytics sync (optional)
-  analytics_enabled: false
+  analytics_enabled: true
   analytics_min_age_hours: 48
   analytics_sync_interval_hours: 24
   analytics_max_videos_per_run: 20
 
-# Captions (burned-in subtitles — requires DEEPGRAM_API_KEY env var)
+# Captions (burned-in subtitles -- requires DEEPGRAM_API_KEY env var)
 # captions:
 #   enabled: false
+
+
+
+
+

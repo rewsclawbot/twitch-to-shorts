@@ -18,7 +18,7 @@ These are documented in the roadmap but NOT being built yet. Phase discipline: d
 ## Action Items
 
 - [ ] **TikTok business verification** — Start the verification process now; it takes weeks. Doesn't require any engineering work.
-- [ ] **Enable analytics** — After Phase 1.4 data checkpoint (~2026-02-16), flip `analytics_enabled: true` and start collecting YouTube performance data.
+- [x] **Enable analytics** — Flipped `analytics_enabled: true`, removed dead impression metrics tier (impressions/CTR not available via API). Collecting views, watch time, retention. Performance multiplier stays dormant (returns 1.0) until sufficient CTR data.
 
 ## Recently Completed
 

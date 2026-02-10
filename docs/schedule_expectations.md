@@ -143,6 +143,13 @@ Use this data to establish baselines and spot regressions.
 | Feb 8, 14:17 | 17:04 | +2h 47m | Uploaded: Your the winner! |
 | Feb 8, 18:17 | 20:59 | +2h 42m | Uploaded: CLOAZY YOU SO UGLY.... |
 | Feb 8, 22:17 | — | SKIP | Skipped by GitHub (2/3 days skipped) |
+| Feb 9, 02:17 | — | SKIP | Skipped by GitHub (1st skip for this slot) |
+| Feb 9, 06:17 | 08:08 | +1h 51m | Uploaded: I'M VIEWBOTTING?! |
+| Feb 9, 10:17 | 12:05 | +1h 48m | Uploaded: HUTCH?? WHAT??? GOOD?? |
+| Feb 9, ~13:00 | — | — | Manual upload: Buddy we have a flying black Dorito... |
+| Feb 9, 14:17 | 17:30 | +3h 13m | Uploaded: YAAAAAAAS |
+| Feb 9, 18:17 | 20:07 | +1h 50m | Uploaded: No |
+| Feb 9, 22:17 | 00:02 | +1h 45m | Uploaded: nick the thief |
 
 **Baseline metrics (20 cron slots observed, pre-offset schedule):**
 - Average delay: ~1h 58m
@@ -152,13 +159,14 @@ Use this data to establish baselines and spot regressions.
 - Effective runs/day: ~5 (expect ~6 with offset schedule)
 - Upload success rate (when triggered, excluding known-fixed bugs): ~80%
 
-**Post-offset baseline (Feb 7-8, 16 slots observed):**
-- Average delay: ~3h 03m (up from ~1h 58m pre-offset)
-- Delay range: 2h 38m to 3h 43m
-- 22:17 UTC skip rate: 67% (2/3 days) — replacing 00:00 as the problem slot
-- Non-22:17 skip rate: 0%
-- Effective runs/day: ~5 (same as pre-offset, just different slot skipped)
-- Upload success rate: 100% (17/17 triggered runs uploaded)
+**Post-offset baseline (Feb 7-9, 22 slots observed):**
+- Average delay: ~2h 36m (down from ~3h 03m as Feb 9 ran faster)
+- Delay range: 1h 45m to 3h 43m
+- 22:17 UTC skip rate: 50% (2/4 days) — improving, fired on Feb 9
+- 02:17 UTC skip rate: 33% (1/3 days) — first skip observed Feb 9
+- Other slots skip rate: 0%
+- Effective runs/day: ~5 (consistent across all observed days)
+- Upload success rate: 100% (22/22 triggered runs uploaded)
 - Failure rate: 0%
 
 ---
