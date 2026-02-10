@@ -219,8 +219,8 @@ def update_youtube_metrics(conn: sqlite3.Connection, youtube_id: str, metrics: d
                yt_estimated_minutes_watched = ?,
                yt_avg_view_duration = ?,
                yt_avg_view_percentage = ?,
-               yt_impressions = ?,
-               yt_impressions_ctr = ?,
+               yt_impressions = COALESCE(?, yt_impressions),
+               yt_impressions_ctr = COALESCE(?, yt_impressions_ctr),
                yt_last_sync = ?
            WHERE youtube_id = ?""",
         (

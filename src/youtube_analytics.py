@@ -43,6 +43,27 @@ def _parse_report(response: dict) -> dict | None:
     return dict(zip(headers, row, strict=False))
 
 
+def _to_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_ctr(value: float | None) -> float | None:
+    if value is None:
+        return None
+    # CTR is reported as a percentage (e.g. 0.6 means 0.6%), so normalize to fraction.
+    return value / 100.0
+
+
 def fetch_video_metrics(service, video_id: str, start_date: str, end_date: str) -> dict | None:
     # Try reach metrics first, fall back to core-only if the API rejects them
     reach_available = False
@@ -61,24 +82,6 @@ def fetch_video_metrics(service, video_id: str, start_date: str, end_date: str) 
     data = _parse_report(response)
     if not data:
         return None
-
-    def _to_int(value):
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return None
-
-    def _to_float(value):
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-
-    def _normalize_ctr(value):
-        if value is None:
-            return None
-        # CTR is returned as a percentage (e.g. 0.6 means 0.6%), so normalize to fraction.
-        return value / 100.0
 
     result = {
         "yt_views": _to_int(data.get("views")),

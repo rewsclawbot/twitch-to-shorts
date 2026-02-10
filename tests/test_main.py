@@ -13,6 +13,7 @@ from main import (
     _process_single_clip,
     _process_streamer,
     _run_pipeline_inner,
+    _sync_streamer_metrics,
     validate_config,
 )
 from src.db import init_schema
@@ -574,3 +575,293 @@ class TestValidateConfig:
         raw = {"youtube": {"client_secrets_file": "s.json"}}
         with pytest.raises(ValueError, match="TWITCH_CLIENT_ID"):
             validate_config(streamers, raw)
+
+
+# ---- _sync_streamer_metrics tests ----
+
+class TestSyncStreamerMetrics:
+    """Tests for _sync_streamer_metrics — analytics + reporting API fallback."""
+
+    def _make_clip_row(self, youtube_id, posted_at="2026-01-01T00:00:00+00:00"):
+        """Return a dict that looks like a sqlite3.Row from get_clips_for_metrics."""
+        return {"youtube_id": youtube_id, "posted_at": posted_at}
+
+    @patch("main.get_analytics_service", return_value=MagicMock())
+    @patch("main.get_clips_for_metrics", return_value=[])
+    def test_no_eligible_clips(self, mock_clips, mock_service):
+        conn = MagicMock()
+        result = _sync_streamer_metrics(
+            conn, "streamer1", "secrets.json", "creds.json",
+            min_age_hours=48, sync_interval_hours=24, max_videos=10,
+        )
+        assert result == 0
+
+    @patch("main.touch_youtube_metrics_sync", create=True)
+    @patch("main.update_youtube_reach_metrics")
+    @patch("main.get_reporting_service")
+    @patch("main.update_youtube_metrics")
+    @patch("main.fetch_video_metrics")
+    @patch("main.get_clips_for_metrics")
+    @patch("main.get_analytics_service", return_value=MagicMock())
+    def test_analytics_success_full_metrics(self, mock_svc, mock_clips,
+                                             mock_fetch, mock_update,
+                                             mock_reporting_svc, mock_reach_update,
+                                             mock_touch):
+        """Full analytics (including impressions) — reporting NOT called."""
+        mock_clips.return_value = [self._make_clip_row("yt_A")]
+        mock_fetch.return_value = {
+            "yt_views": 100,
+            "yt_estimated_minutes_watched": 10.0,
+            "yt_avg_view_duration": 30.0,
+            "yt_avg_view_percentage": 60.0,
+            "yt_impressions": 500,
+            "yt_impressions_ctr": 0.05,
+            "yt_last_sync": "2026-02-10T00:00:00+00:00",
+        }
+
+        conn = MagicMock()
+        result = _sync_streamer_metrics(
+            conn, "s", "secrets.json", "creds.json",
+            min_age_hours=48, sync_interval_hours=24, max_videos=10,
+        )
+
+        assert result == 1
+        mock_update.assert_called_once()
+        mock_reporting_svc.assert_not_called()
+        mock_touch.assert_not_called()
+
+    @patch("main.touch_youtube_metrics_sync", create=True)
+    @patch("main.update_youtube_reach_metrics")
+    @patch("main.fetch_reach_metrics")
+    @patch("main.get_reporting_service", return_value=MagicMock())
+    @patch("main.update_youtube_metrics")
+    @patch("main.fetch_video_metrics")
+    @patch("main.get_clips_for_metrics")
+    @patch("main.get_analytics_service", return_value=MagicMock())
+    def test_analytics_partial_triggers_reporting(self, mock_svc, mock_clips,
+                                                    mock_fetch, mock_update,
+                                                    mock_reporting_svc,
+                                                    mock_reach_fetch,
+                                                    mock_reach_update,
+                                                    mock_touch):
+        """Analytics returns metrics with yt_impressions=None -> reporting called."""
+        mock_clips.return_value = [self._make_clip_row("yt_B")]
+        mock_fetch.return_value = {
+            "yt_views": 100,
+            "yt_estimated_minutes_watched": 10.0,
+            "yt_avg_view_duration": 30.0,
+            "yt_avg_view_percentage": 60.0,
+            "yt_impressions": None,
+            "yt_impressions_ctr": None,
+            "yt_last_sync": "2026-02-10T00:00:00+00:00",
+        }
+        mock_reach_fetch.return_value = {
+            "yt_B": {"yt_impressions": 200, "yt_impressions_ctr": 0.03},
+        }
+
+        conn = MagicMock()
+        result = _sync_streamer_metrics(
+            conn, "s", "secrets.json", "creds.json",
+            min_age_hours=48, sync_interval_hours=24, max_videos=10,
+        )
+
+        assert result == 1
+        mock_update.assert_called_once()
+        mock_reporting_svc.assert_called_once()
+        mock_reach_fetch.assert_called_once()
+        mock_reach_update.assert_called_once()
+        mock_touch.assert_not_called()
+
+    @patch("main.touch_youtube_metrics_sync", create=True)
+    @patch("main.update_youtube_reach_metrics")
+    @patch("main.fetch_reach_metrics")
+    @patch("main.get_reporting_service", return_value=MagicMock())
+    @patch("main.update_youtube_metrics")
+    @patch("main.fetch_video_metrics")
+    @patch("main.get_clips_for_metrics")
+    @patch("main.get_analytics_service", return_value=MagicMock())
+    def test_analytics_fail_triggers_reporting(self, mock_svc, mock_clips,
+                                                mock_fetch, mock_update,
+                                                mock_reporting_svc,
+                                                mock_reach_fetch,
+                                                mock_reach_update,
+                                                mock_touch):
+        """Analytics raises Exception -> reporting called for that video."""
+        mock_clips.return_value = [self._make_clip_row("yt_C")]
+        mock_fetch.side_effect = Exception("analytics API down")
+        mock_reach_fetch.return_value = {
+            "yt_C": {"yt_impressions": 300, "yt_impressions_ctr": 0.04},
+        }
+
+        conn = MagicMock()
+        result = _sync_streamer_metrics(
+            conn, "s", "secrets.json", "creds.json",
+            min_age_hours=48, sync_interval_hours=24, max_videos=10,
+        )
+
+        assert result == 1
+        mock_update.assert_not_called()
+        mock_reporting_svc.assert_called_once()
+        mock_reach_update.assert_called_once()
+        mock_touch.assert_not_called()
+
+    @patch("main.touch_youtube_metrics_sync", create=True)
+    @patch("main.update_youtube_reach_metrics")
+    @patch("main.fetch_reach_metrics")
+    @patch("main.get_reporting_service")
+    @patch("main.update_youtube_metrics")
+    @patch("main.fetch_video_metrics")
+    @patch("main.get_clips_for_metrics")
+    @patch("main.get_analytics_service", return_value=MagicMock())
+    def test_both_apis_fail_no_touch(self, mock_svc, mock_clips,
+                                      mock_fetch, mock_update,
+                                      mock_reporting_svc,
+                                      mock_reach_fetch,
+                                      mock_reach_update,
+                                      mock_touch):
+        """Both analytics AND reporting fail -> touch_youtube_metrics_sync NOT called."""
+        mock_clips.return_value = [self._make_clip_row("yt_D")]
+        mock_fetch.side_effect = Exception("analytics down")
+        mock_reporting_svc.side_effect = Exception("reporting down")
+
+        conn = MagicMock()
+        result = _sync_streamer_metrics(
+            conn, "s", "secrets.json", "creds.json",
+            min_age_hours=48, sync_interval_hours=24, max_videos=10,
+        )
+
+        assert result == 0
+        mock_touch.assert_not_called()
+        mock_reach_update.assert_not_called()
+
+    @patch("main.touch_youtube_metrics_sync", create=True)
+    @patch("main.update_youtube_reach_metrics")
+    @patch("main.fetch_reach_metrics")
+    @patch("main.get_reporting_service", return_value=MagicMock())
+    @patch("main.update_youtube_metrics")
+    @patch("main.fetch_video_metrics")
+    @patch("main.get_clips_for_metrics")
+    @patch("main.get_analytics_service", return_value=MagicMock())
+    def test_reporting_api_exception_graceful(self, mock_svc, mock_clips,
+                                               mock_fetch, mock_update,
+                                               mock_reporting_svc,
+                                               mock_reach_fetch,
+                                               mock_reach_update,
+                                               mock_touch):
+        """Reporting throws Exception -> no crash, analytics-only synced count returned."""
+        mock_clips.return_value = [self._make_clip_row("yt_E")]
+        mock_fetch.return_value = {
+            "yt_views": 50,
+            "yt_estimated_minutes_watched": 5.0,
+            "yt_avg_view_duration": 20.0,
+            "yt_avg_view_percentage": 40.0,
+            "yt_impressions": None,
+            "yt_impressions_ctr": None,
+            "yt_last_sync": "2026-02-10T00:00:00+00:00",
+        }
+        mock_reach_fetch.side_effect = Exception("reporting API crashed")
+
+        conn = MagicMock()
+        result = _sync_streamer_metrics(
+            conn, "s", "secrets.json", "creds.json",
+            min_age_hours=48, sync_interval_hours=24, max_videos=10,
+        )
+
+        # Analytics synced 1 video even though reporting failed
+        assert result == 1
+        mock_update.assert_called_once()
+
+    @patch("main.touch_youtube_metrics_sync", create=True)
+    @patch("main.update_youtube_reach_metrics")
+    @patch("main.fetch_reach_metrics")
+    @patch("main.get_reporting_service", return_value=MagicMock())
+    @patch("main.update_youtube_metrics")
+    @patch("main.fetch_video_metrics")
+    @patch("main.get_clips_for_metrics")
+    @patch("main.get_analytics_service", return_value=MagicMock())
+    def test_multiple_videos_mixed_results(self, mock_svc, mock_clips,
+                                             mock_fetch, mock_update,
+                                             mock_reporting_svc,
+                                             mock_reach_fetch,
+                                             mock_reach_update,
+                                             mock_touch):
+        """3 videos: full analytics, partial (triggers reporting), analytics failure."""
+        mock_clips.return_value = [
+            self._make_clip_row("yt_1"),
+            self._make_clip_row("yt_2"),
+            self._make_clip_row("yt_3"),
+        ]
+
+        def fetch_side_effect(service, vid, start, end):
+            if vid == "yt_1":
+                return {
+                    "yt_views": 100, "yt_estimated_minutes_watched": 10.0,
+                    "yt_avg_view_duration": 30.0, "yt_avg_view_percentage": 60.0,
+                    "yt_impressions": 500, "yt_impressions_ctr": 0.05,
+                    "yt_last_sync": "2026-02-10T00:00:00+00:00",
+                }
+            if vid == "yt_2":
+                return {
+                    "yt_views": 50, "yt_estimated_minutes_watched": 5.0,
+                    "yt_avg_view_duration": 20.0, "yt_avg_view_percentage": 40.0,
+                    "yt_impressions": None, "yt_impressions_ctr": None,
+                    "yt_last_sync": "2026-02-10T00:00:00+00:00",
+                }
+            raise Exception("analytics failed for yt_3")
+
+        mock_fetch.side_effect = fetch_side_effect
+        mock_reach_fetch.return_value = {
+            "yt_2": {"yt_impressions": 200, "yt_impressions_ctr": 0.03},
+            "yt_3": {"yt_impressions": 100, "yt_impressions_ctr": 0.02},
+        }
+
+        conn = MagicMock()
+        result = _sync_streamer_metrics(
+            conn, "s", "secrets.json", "creds.json",
+            min_age_hours=48, sync_interval_hours=24, max_videos=10,
+        )
+
+        # yt_1: analytics OK, yt_2: analytics + reporting, yt_3: reporting only
+        assert result == 3
+        assert mock_update.call_count == 2  # yt_1 and yt_2
+        assert mock_reach_update.call_count == 2  # yt_2 and yt_3
+
+    @patch("main.touch_youtube_metrics_sync", create=True)
+    @patch("main.update_youtube_reach_metrics")
+    @patch("main.fetch_reach_metrics")
+    @patch("main.get_reporting_service", return_value=MagicMock())
+    @patch("main.update_youtube_metrics")
+    @patch("main.fetch_video_metrics")
+    @patch("main.get_clips_for_metrics")
+    @patch("main.get_analytics_service", return_value=MagicMock())
+    def test_return_count_accuracy(self, mock_svc, mock_clips,
+                                    mock_fetch, mock_update,
+                                    mock_reporting_svc,
+                                    mock_reach_fetch,
+                                    mock_reach_update,
+                                    mock_touch):
+        """Return value of len(synced_ids) matches actual synced videos."""
+        mock_clips.return_value = [
+            self._make_clip_row("yt_X"),
+            self._make_clip_row("yt_Y"),
+        ]
+        mock_fetch.side_effect = [
+            {
+                "yt_views": 10, "yt_estimated_minutes_watched": 1.0,
+                "yt_avg_view_duration": 5.0, "yt_avg_view_percentage": 20.0,
+                "yt_impressions": 100, "yt_impressions_ctr": 0.02,
+                "yt_last_sync": "2026-02-10T00:00:00+00:00",
+            },
+            None,  # yt_Y returns None (empty rows)
+        ]
+        # yt_Y ends up in pending_reach because metrics is None
+        mock_reach_fetch.return_value = {}  # reporting finds nothing
+
+        conn = MagicMock()
+        result = _sync_streamer_metrics(
+            conn, "s", "secrets.json", "creds.json",
+            min_age_hours=48, sync_interval_hours=24, max_videos=10,
+        )
+
+        # Only yt_X was actually synced
+        assert result == 1

@@ -13,6 +13,7 @@ from src.db import (
     touch_youtube_metrics_sync,
     update_streamer_stats,
     update_youtube_metrics,
+    update_youtube_reach_metrics,
 )
 from tests.conftest import make_clip
 
@@ -293,3 +294,94 @@ class TestPerformanceMultiplier:
         conn.commit()
         mult = get_streamer_performance_multiplier(conn, "extreme")
         assert mult == 2.0
+
+
+class TestUpdateYoutubeReachMetrics:
+    """Tests for update_youtube_reach_metrics — COALESCE-based reach metric upsert."""
+
+    def _insert_clip_with_yt(self, conn, youtube_id, impressions=None, ctr=None):
+        """Helper: insert a clip row, then optionally set initial impression values."""
+        now = datetime.now(UTC).isoformat()
+        conn.execute(
+            "INSERT INTO clips (clip_id, streamer, posted_at, youtube_id) VALUES (?, ?, ?, ?)",
+            (f"clip_{youtube_id}", "s", now, youtube_id),
+        )
+        if impressions is not None or ctr is not None:
+            conn.execute(
+                "UPDATE clips SET yt_impressions = ?, yt_impressions_ctr = ? WHERE youtube_id = ?",
+                (impressions, ctr, youtube_id),
+            )
+        conn.commit()
+
+    def test_fills_null_impressions(self, conn):
+        self._insert_clip_with_yt(conn, "yt_r1")
+        now = datetime.now(UTC).isoformat()
+        update_youtube_reach_metrics(conn, "yt_r1", impressions=100, impressions_ctr=None, synced_at=now)
+        row = conn.execute("SELECT yt_impressions FROM clips WHERE youtube_id = 'yt_r1'").fetchone()
+        assert row["yt_impressions"] == 100
+
+    def test_fills_null_ctr(self, conn):
+        self._insert_clip_with_yt(conn, "yt_r2")
+        now = datetime.now(UTC).isoformat()
+        update_youtube_reach_metrics(conn, "yt_r2", impressions=None, impressions_ctr=0.05, synced_at=now)
+        row = conn.execute("SELECT yt_impressions_ctr FROM clips WHERE youtube_id = 'yt_r2'").fetchone()
+        assert row["yt_impressions_ctr"] == pytest.approx(0.05)
+
+    def test_coalesce_preserves_existing(self, conn):
+        """COALESCE(?, yt_impressions) with ? = None keeps existing value."""
+        self._insert_clip_with_yt(conn, "yt_r3", impressions=200)
+        now = datetime.now(UTC).isoformat()
+        update_youtube_reach_metrics(conn, "yt_r3", impressions=None, impressions_ctr=None, synced_at=now)
+        row = conn.execute("SELECT yt_impressions FROM clips WHERE youtube_id = 'yt_r3'").fetchone()
+        assert row["yt_impressions"] == 200
+
+    def test_overwrites_with_new_nonnull(self, conn):
+        """COALESCE(?, yt_impressions) with non-null ? overwrites existing."""
+        self._insert_clip_with_yt(conn, "yt_r4", impressions=200)
+        now = datetime.now(UTC).isoformat()
+        update_youtube_reach_metrics(conn, "yt_r4", impressions=300, impressions_ctr=None, synced_at=now)
+        row = conn.execute("SELECT yt_impressions FROM clips WHERE youtube_id = 'yt_r4'").fetchone()
+        assert row["yt_impressions"] == 300
+
+    def test_synced_at_always_updated(self, conn):
+        """yt_last_sync is set even when impression values are both None."""
+        self._insert_clip_with_yt(conn, "yt_r5")
+        synced = "2026-02-10T12:00:00+00:00"
+        update_youtube_reach_metrics(conn, "yt_r5", impressions=None, impressions_ctr=None, synced_at=synced)
+        row = conn.execute("SELECT yt_last_sync FROM clips WHERE youtube_id = 'yt_r5'").fetchone()
+        assert row["yt_last_sync"] == synced
+
+    def test_nonexistent_youtube_id(self, conn):
+        """Calling with a youtube_id not in DB should not raise."""
+        now = datetime.now(UTC).isoformat()
+        update_youtube_reach_metrics(conn, "yt_nonexistent", impressions=100, impressions_ctr=0.05, synced_at=now)
+        row = conn.execute("SELECT * FROM clips WHERE youtube_id = 'yt_nonexistent'").fetchone()
+        assert row is None
+
+
+class TestTouchYoutubeMetricsSync:
+    """Tests for touch_youtube_metrics_sync — updates only yt_last_sync."""
+
+    def test_updates_last_sync_only(self, conn):
+        now = datetime.now(UTC).isoformat()
+        conn.execute(
+            "INSERT INTO clips (clip_id, streamer, posted_at, youtube_id, yt_views, yt_impressions) VALUES (?, ?, ?, ?, ?, ?)",
+            ("c_touch", "s", now, "yt_touch", 500, 1000),
+        )
+        conn.commit()
+
+        later = "2026-02-10T18:00:00+00:00"
+        touch_youtube_metrics_sync(conn, "yt_touch", later)
+
+        row = conn.execute(
+            "SELECT yt_last_sync, yt_views, yt_impressions FROM clips WHERE youtube_id = 'yt_touch'"
+        ).fetchone()
+        assert row["yt_last_sync"] == later
+        assert row["yt_views"] == 500  # untouched
+        assert row["yt_impressions"] == 1000  # untouched
+
+    def test_nonexistent_youtube_id(self, conn):
+        """Calling touch on a missing youtube_id should not raise."""
+        touch_youtube_metrics_sync(conn, "yt_ghost", "2026-02-10T00:00:00+00:00")
+        row = conn.execute("SELECT * FROM clips WHERE youtube_id = 'yt_ghost'").fetchone()
+        assert row is None

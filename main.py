@@ -20,7 +20,6 @@ from src.db import (  # noqa: E402
     insert_clip,
     recent_upload_count,
     record_known_clip,
-    touch_youtube_metrics_sync,
     update_streamer_stats,
     update_youtube_metrics,
     update_youtube_reach_metrics,
@@ -163,7 +162,6 @@ def _sync_streamer_metrics(
     end_date = datetime.now(UTC).date().isoformat()
     synced_ids: set[str] = set()
     pending_reach: dict[str, str] = {}
-    pending_touch: set[str] = set()
     for row in rows:
         youtube_id = row["youtube_id"]
         posted_at = row["posted_at"]
@@ -182,7 +180,6 @@ def _sync_streamer_metrics(
                 pending_reach[youtube_id] = start_date
         else:
             pending_reach[youtube_id] = start_date
-            pending_touch.add(youtube_id)
 
     if pending_reach:
         reach_metrics: dict[str, dict] = {}
@@ -210,10 +207,6 @@ def _sync_streamer_metrics(
                 now,
             )
             synced_ids.add(youtube_id)
-            pending_touch.discard(youtube_id)
-
-        for youtube_id in pending_touch:
-            touch_youtube_metrics_sync(conn, youtube_id, now)
 
     return len(synced_ids)
 
