@@ -172,11 +172,14 @@ def _sync_streamer_metrics(
     service = get_analytics_service(client_secrets_file, credentials_file)
     rows = get_clips_for_metrics(conn, streamer, min_age_hours, sync_interval_hours, max_videos)
     if not rows:
+        log.info("Analytics sync for %s: 0 videos eligible", streamer)
         return 0
 
     end_date = datetime.now(UTC).date().isoformat()
     synced_ids: set[str] = set()
     pending_reach: dict[str, str] = {}
+    analytics_ok = 0
+    analytics_fail = 0
     for row in rows:
         youtube_id = row["youtube_id"]
         posted_at = row["posted_at"]
@@ -189,13 +192,16 @@ def _sync_streamer_metrics(
             log.warning("Analytics metrics failed for %s", youtube_id, exc_info=True)
             metrics = None
         if metrics:
+            analytics_ok += 1
             update_youtube_metrics(conn, youtube_id, metrics)
             synced_ids.add(youtube_id)
             if metrics.get("yt_impressions") is None or metrics.get("yt_impressions_ctr") is None:
                 pending_reach[youtube_id] = start_date
         else:
+            analytics_fail += 1
             pending_reach[youtube_id] = start_date
 
+    reporting_ok = 0
     if pending_reach:
         reach_metrics: dict[str, dict] = {}
         try:
@@ -222,7 +228,12 @@ def _sync_streamer_metrics(
                 now,
             )
             synced_ids.add(youtube_id)
+            reporting_ok += 1
 
+    log.info(
+        "Analytics sync for %s: %d eligible, analytics_ok=%d analytics_fail=%d reporting_ok=%d synced=%d",
+        streamer, len(rows), analytics_ok, analytics_fail, reporting_ok, len(synced_ids),
+    )
     return len(synced_ids)
 
 

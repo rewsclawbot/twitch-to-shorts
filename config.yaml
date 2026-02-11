@@ -5,13 +5,14 @@ twitch:
 youtube:
   # Path to OAuth client secrets JSON downloaded from Google Cloud Console
   client_secrets_file: "credentials/client_secret.json"
-  # Optional templates:
-  # title_template: "{title} | {streamer}"
+  # A/B title templates (deterministic per clip_id via MD5)
+  title_templates:
+    - "{title}"
+    - "{title} | {game}"
+  # Optional single template (overridden by title_templates if both set):
+  # title_template: "{title}"
   # description_template: "Clip from {streamer}'s stream\n\n#Shorts"
-  # Optional A/B title/description templates:
-  # title_templates:
-  #   - "{title} | {streamer}"
-  #   - "{streamer} POPS OFF | {game}"
+  # Optional A/B description templates:
   # description_templates:
   #   - "Clip from {streamer}'s stream\n\n#Shorts"
   #   - "{streamer} highlights\n\n#Shorts"
@@ -58,7 +59,7 @@ pipeline:
   max_uploads_per_window: 1
   # Analytics sync (optional)
   analytics_enabled: true
-  analytics_min_age_hours: 48
+  analytics_min_age_hours: 24
   analytics_sync_interval_hours: 24
   analytics_max_videos_per_run: 20
 

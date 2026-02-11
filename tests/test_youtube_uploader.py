@@ -7,6 +7,7 @@ from src.youtube_uploader import (
     _sanitize_text,
     _truncate_title,
     _uploads_playlist_cache,
+    build_upload_title,
     check_channel_for_duplicate,
     upload_short,
     validate_templates,
@@ -156,6 +157,27 @@ def _make_mock_service(video_id="vid_123"):
     insert_req.next_chunk.return_value = (None, {"id": video_id})
     service.videos().insert.return_value = insert_req
     return service
+
+
+class TestBuildUploadTitle:
+    def test_default_title_no_streamer_suffix(self):
+        """Default title (no templates) should be clip title only, without '| streamer'."""
+        clip = make_clip(title="Epic Headshot", streamer="StreamerName")
+        result = build_upload_title(clip)
+        assert result == "Epic Headshot"
+        assert "StreamerName" not in result
+
+    def test_template_overrides_default(self):
+        clip = make_clip(title="Nice Play", streamer="s1")
+        clip.game_name = "Valorant"
+        result = build_upload_title(clip, title_template="{title} | {game}")
+        assert result == "Nice Play | Valorant"
+
+    def test_templates_list_overrides_single(self):
+        clip = make_clip(clip_id="deterministic_id", title="Cool Clip", streamer="s1")
+        clip.game_name = "Apex"
+        result = build_upload_title(clip, title_template="{title} SINGLE", title_templates=["{title} LIST"])
+        assert result == "Cool Clip LIST"
 
 
 class TestUploadShortPrebuiltTitle:

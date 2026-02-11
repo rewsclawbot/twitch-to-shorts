@@ -252,6 +252,110 @@ class TestYouTubeMetrics:
         row = conn.execute("SELECT yt_last_sync FROM clips WHERE youtube_id = 'yt1'").fetchone()
         assert row["yt_last_sync"] == later
 
+    def test_views_regression_prevented(self, conn):
+        """Updating with a lower views count should keep the higher existing value."""
+        now = datetime.now(UTC).isoformat()
+        conn.execute(
+            "INSERT INTO clips (clip_id, streamer, posted_at, youtube_id) VALUES (?, ?, ?, ?)",
+            ("c_reg", "s", now, "yt_reg"),
+        )
+        conn.commit()
+
+        update_youtube_metrics(conn, "yt_reg", {
+            "yt_views": 500,
+            "yt_estimated_minutes_watched": 100.0,
+            "yt_avg_view_duration": 30.0,
+            "yt_avg_view_percentage": 75.0,
+            "yt_impressions": 2000,
+            "yt_impressions_ctr": 5.0,
+            "yt_last_sync": now,
+        })
+
+        # Now update with LOWER cumulative metrics — should NOT regress
+        update_youtube_metrics(conn, "yt_reg", {
+            "yt_views": 200,
+            "yt_estimated_minutes_watched": 50.0,
+            "yt_avg_view_duration": 25.0,
+            "yt_avg_view_percentage": 60.0,
+            "yt_impressions": 800,
+            "yt_impressions_ctr": 3.0,
+            "yt_last_sync": now,
+        })
+
+        row = conn.execute(
+            "SELECT yt_views, yt_estimated_minutes_watched, yt_impressions, yt_avg_view_duration, yt_avg_view_percentage FROM clips WHERE youtube_id = 'yt_reg'"
+        ).fetchone()
+        assert row["yt_views"] == 500  # kept higher
+        assert row["yt_estimated_minutes_watched"] == pytest.approx(100.0)  # kept higher
+        assert row["yt_impressions"] == 2000  # kept higher
+        # Rate metrics use COALESCE — latest non-null wins
+        assert row["yt_avg_view_duration"] == pytest.approx(25.0)
+        assert row["yt_avg_view_percentage"] == pytest.approx(60.0)
+
+    def test_views_increase_allowed(self, conn):
+        """Updating with a higher views count should take the new value."""
+        now = datetime.now(UTC).isoformat()
+        conn.execute(
+            "INSERT INTO clips (clip_id, streamer, posted_at, youtube_id) VALUES (?, ?, ?, ?)",
+            ("c_inc", "s", now, "yt_inc"),
+        )
+        conn.commit()
+
+        update_youtube_metrics(conn, "yt_inc", {
+            "yt_views": 100,
+            "yt_estimated_minutes_watched": 20.0,
+            "yt_impressions": 500,
+            "yt_last_sync": now,
+        })
+        update_youtube_metrics(conn, "yt_inc", {
+            "yt_views": 300,
+            "yt_estimated_minutes_watched": 60.0,
+            "yt_impressions": 1500,
+            "yt_last_sync": now,
+        })
+
+        row = conn.execute(
+            "SELECT yt_views, yt_estimated_minutes_watched, yt_impressions FROM clips WHERE youtube_id = 'yt_inc'"
+        ).fetchone()
+        assert row["yt_views"] == 300
+        assert row["yt_estimated_minutes_watched"] == pytest.approx(60.0)
+        assert row["yt_impressions"] == 1500
+
+    def test_null_preserves_existing_metrics(self, conn):
+        """Updating with None values should keep existing values (not regress to NULL)."""
+        now = datetime.now(UTC).isoformat()
+        conn.execute(
+            "INSERT INTO clips (clip_id, streamer, posted_at, youtube_id) VALUES (?, ?, ?, ?)",
+            ("c_null", "s", now, "yt_null"),
+        )
+        conn.commit()
+
+        update_youtube_metrics(conn, "yt_null", {
+            "yt_views": 400,
+            "yt_estimated_minutes_watched": 80.0,
+            "yt_avg_view_duration": 30.0,
+            "yt_avg_view_percentage": 70.0,
+            "yt_impressions": 1000,
+            "yt_impressions_ctr": 4.0,
+            "yt_last_sync": now,
+        })
+
+        # Update with all None — nothing should change except yt_last_sync
+        later = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+        update_youtube_metrics(conn, "yt_null", {
+            "yt_last_sync": later,
+        })
+
+        row = conn.execute(
+            "SELECT yt_views, yt_estimated_minutes_watched, yt_avg_view_duration, yt_avg_view_percentage, yt_impressions, yt_impressions_ctr FROM clips WHERE youtube_id = 'yt_null'"
+        ).fetchone()
+        assert row["yt_views"] == 400
+        assert row["yt_estimated_minutes_watched"] == pytest.approx(80.0)
+        assert row["yt_avg_view_duration"] == pytest.approx(30.0)
+        assert row["yt_avg_view_percentage"] == pytest.approx(70.0)
+        assert row["yt_impressions"] == 1000
+        assert row["yt_impressions_ctr"] == pytest.approx(4.0)
+
 
 class TestPerformanceMultiplier:
     def test_returns_one_with_no_data(self, conn):
@@ -336,13 +440,21 @@ class TestUpdateYoutubeReachMetrics:
         row = conn.execute("SELECT yt_impressions FROM clips WHERE youtube_id = 'yt_r3'").fetchone()
         assert row["yt_impressions"] == 200
 
-    def test_overwrites_with_new_nonnull(self, conn):
-        """COALESCE(?, yt_impressions) with non-null ? overwrites existing."""
+    def test_higher_value_overwrites(self, conn):
+        """Higher impressions value overwrites existing."""
         self._insert_clip_with_yt(conn, "yt_r4", impressions=200)
         now = datetime.now(UTC).isoformat()
         update_youtube_reach_metrics(conn, "yt_r4", impressions=300, impressions_ctr=None, synced_at=now)
         row = conn.execute("SELECT yt_impressions FROM clips WHERE youtube_id = 'yt_r4'").fetchone()
         assert row["yt_impressions"] == 300
+
+    def test_lower_value_does_not_regress(self, conn):
+        """Lower impressions value should NOT overwrite existing (MAX guard)."""
+        self._insert_clip_with_yt(conn, "yt_r4b", impressions=500)
+        now = datetime.now(UTC).isoformat()
+        update_youtube_reach_metrics(conn, "yt_r4b", impressions=200, impressions_ctr=None, synced_at=now)
+        row = conn.execute("SELECT yt_impressions FROM clips WHERE youtube_id = 'yt_r4b'").fetchone()
+        assert row["yt_impressions"] == 500
 
     def test_synced_at_always_updated(self, conn):
         """yt_last_sync is set even when impression values are both None."""

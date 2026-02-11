@@ -237,7 +237,7 @@ def build_upload_title(
 ) -> str:
     """Build the YouTube title for a clip using the same logic as upload_short."""
     chosen_title = _choose_template(clip.id, title_templates) or title_template
-    raw_title = _render_template(chosen_title, clip) if chosen_title else f"{clip.title} | {clip.streamer}"
+    raw_title = _render_template(chosen_title, clip) if chosen_title else clip.title
     return _truncate_title(_sanitize_text(raw_title))
 
 

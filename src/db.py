@@ -258,19 +258,25 @@ def get_clips_for_metrics(
 def update_youtube_metrics(conn: sqlite3.Connection, youtube_id: str, metrics: dict):
     conn.execute(
         """UPDATE clips
-           SET yt_views = ?,
-               yt_estimated_minutes_watched = ?,
-               yt_avg_view_duration = ?,
-               yt_avg_view_percentage = ?,
-               yt_impressions = COALESCE(?, yt_impressions),
+           SET yt_views = CASE WHEN ? IS NULL THEN yt_views
+                               ELSE MAX(?, COALESCE(yt_views, 0)) END,
+               yt_estimated_minutes_watched = CASE WHEN ? IS NULL THEN yt_estimated_minutes_watched
+                                                    ELSE MAX(?, COALESCE(yt_estimated_minutes_watched, 0)) END,
+               yt_avg_view_duration = COALESCE(?, yt_avg_view_duration),
+               yt_avg_view_percentage = COALESCE(?, yt_avg_view_percentage),
+               yt_impressions = CASE WHEN ? IS NULL THEN yt_impressions
+                                     ELSE MAX(?, COALESCE(yt_impressions, 0)) END,
                yt_impressions_ctr = COALESCE(?, yt_impressions_ctr),
                yt_last_sync = ?
            WHERE youtube_id = ?""",
         (
             metrics.get("yt_views"),
+            metrics.get("yt_views"),
+            metrics.get("yt_estimated_minutes_watched"),
             metrics.get("yt_estimated_minutes_watched"),
             metrics.get("yt_avg_view_duration"),
             metrics.get("yt_avg_view_percentage"),
+            metrics.get("yt_impressions"),
             metrics.get("yt_impressions"),
             metrics.get("yt_impressions_ctr"),
             metrics.get("yt_last_sync"),
@@ -289,11 +295,12 @@ def update_youtube_reach_metrics(
 ):
     conn.execute(
         """UPDATE clips
-           SET yt_impressions = COALESCE(?, yt_impressions),
+           SET yt_impressions = CASE WHEN ? IS NULL THEN yt_impressions
+                                     ELSE MAX(?, COALESCE(yt_impressions, 0)) END,
                yt_impressions_ctr = COALESCE(?, yt_impressions_ctr),
                yt_last_sync = ?
            WHERE youtube_id = ?""",
-        (impressions, impressions_ctr, synced_at, youtube_id),
+        (impressions, impressions, impressions_ctr, synced_at, youtube_id),
     )
     conn.commit()
 
