@@ -2,6 +2,7 @@ import logging
 import os
 import shutil
 import subprocess
+from urllib.parse import urlsplit
 
 from src.media_utils import is_valid_video
 from src.models import Clip
@@ -9,6 +10,24 @@ from src.models import Clip
 log = logging.getLogger(__name__)
 
 YT_DLP = shutil.which("yt-dlp") or "yt-dlp"
+_MAX_DOWNLOAD_SIZE = "250M"
+_ALLOWED_TWITCH_HOSTS = {
+    "clips.twitch.tv",
+    "www.twitch.tv",
+    "twitch.tv",
+    "m.twitch.tv",
+}
+
+
+def _is_allowed_twitch_url(url: str) -> bool:
+    try:
+        parsed = urlsplit(url)
+    except Exception:
+        return False
+    if parsed.scheme != "https":
+        return False
+    host = (parsed.hostname or "").lower()
+    return host in _ALLOWED_TWITCH_HOSTS
 
 
 def download_clip(clip: Clip, tmp_dir: str) -> str | None:
@@ -26,11 +45,24 @@ def download_clip(clip: Clip, tmp_dir: str) -> str | None:
         os.remove(tmp_path)
 
     clip_url = clip.url
+    if not _is_allowed_twitch_url(clip_url):
+        log.error("Refusing download for clip %s: URL host not allowed (%s)", clip.id, clip_url)
+        return None
     log.info("Downloading clip %s via yt-dlp from %s", clip.id, clip_url)
 
     try:
         subprocess.run(
-            [YT_DLP, "-o", tmp_path, "--no-part", "--no-warnings", "-q", clip_url],
+            [
+                YT_DLP,
+                "-o",
+                tmp_path,
+                "--no-part",
+                "--no-warnings",
+                "-q",
+                "--max-filesize",
+                _MAX_DOWNLOAD_SIZE,
+                clip_url,
+            ],
             check=True, capture_output=True, timeout=120,
         )
     except subprocess.CalledProcessError as e:

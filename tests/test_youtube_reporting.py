@@ -18,6 +18,7 @@ from googleapiclient.errors import HttpError
 from src.youtube_reporting import (
     _ensure_job,
     _filter_reports,
+    _is_allowed_reporting_url,
     _iter_report_rows,
     _parse_iso_date,
     _parse_report_date,
@@ -281,11 +282,40 @@ class TestDateParsers:
         assert _parse_report_date(None) is None
 
 
+class TestReportingUrlAllowlist:
+    def test_allows_google_apis_https(self):
+        assert _is_allowed_reporting_url("https://storage.googleapis.com/some/report.csv.gz")
+        assert _is_allowed_reporting_url("https://content.googleapis.com/download/abc")
+
+    def test_rejects_non_https_or_unknown_host(self):
+        assert not _is_allowed_reporting_url("http://storage.googleapis.com/some/report.csv.gz")
+        assert not _is_allowed_reporting_url("https://evil.example.com/report.csv")
+        assert not _is_allowed_reporting_url("not-a-url")
+
+
 # ===========================================================================
 # _iter_report_rows
 # ===========================================================================
 
 class TestIterReportRows:
+    def test_rejects_untrusted_download_url(self):
+        service = _make_service_stub()
+        rows = list(_iter_report_rows(service, "https://evil.example.com/report.csv"))
+        assert rows == []
+        service.media.assert_not_called()
+
+    @patch("src.youtube_reporting.MediaIoBaseDownload")
+    def test_enforces_download_size_cap(self, mock_downloader_cls):
+        service = _make_service_stub()
+        downloader = MagicMock()
+        status = MagicMock()
+        status.resumable_progress = 200 * 1024 * 1024  # 200 MB > 100 MB cap
+        downloader.next_chunk.return_value = (status, False)
+        mock_downloader_cls.return_value = downloader
+
+        rows = list(_iter_report_rows(service, "https://storage.googleapis.com/report.csv.gz"))
+        assert rows == []
+
     @patch("src.youtube_reporting.MediaIoBaseDownload")
     def test_catches_non_http_errors(self, mock_downloader_cls):
         """If download/parse raises a generic Exception, yield nothing, don't crash."""

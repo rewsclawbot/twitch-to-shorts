@@ -102,8 +102,12 @@ class TestFetchVideoMetrics:
     def test_both_queries_fail(self):
         """Both reach and core queries raise HttpError — returns None."""
         service = MagicMock()
+        # Reach query fails once with 403 (non-retryable), then core query fails
+        # with 500 and is retried up to 3 attempts.
         service.reports().query().execute.side_effect = [
             _http_error(403),
+            _http_error(500),
+            _http_error(500),
             _http_error(500),
         ]
 

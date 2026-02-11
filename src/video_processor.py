@@ -1,6 +1,7 @@
 import contextlib
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -387,15 +388,17 @@ def _run_ffmpeg(input_path: str, output_path: str, vf: str,
         cpu_preset = "fast"
         cmd += ["-c:v", "libx264", "-crf", "20", "-preset", cpu_preset]
 
-    # Two-pass loudnorm: use measured stats if available, else fall back to single-pass
-    if loudness:
+    # Two-pass loudnorm: use measured stats if they are all finite floats,
+    # else fall back to single-pass normalization.
+    normalized_loudness = _normalize_loudness_stats(loudness)
+    if normalized_loudness:
         af = (
             f"loudnorm=I=-14:LRA=11:TP=-1.5"
-            f":measured_I={loudness['input_i']}"
-            f":measured_TP={loudness['input_tp']}"
-            f":measured_LRA={loudness['input_lra']}"
-            f":measured_thresh={loudness['input_thresh']}"
-            f":offset={loudness['target_offset']}"
+            f":measured_I={normalized_loudness['input_i']}"
+            f":measured_TP={normalized_loudness['input_tp']}"
+            f":measured_LRA={normalized_loudness['input_lra']}"
+            f":measured_thresh={normalized_loudness['input_thresh']}"
+            f":offset={normalized_loudness['target_offset']}"
             f":linear=true"
         )
     else:
@@ -438,3 +441,20 @@ def _run_ffmpeg(input_path: str, output_path: str, vf: str,
     os.replace(tmp_output, output_path)
     log.info("Processed vertical clip (%s): %s", label, output_path)
     return True
+
+
+def _normalize_loudness_stats(loudness: dict | None) -> dict[str, float] | None:
+    if not isinstance(loudness, dict):
+        return None
+    keys = ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")
+    normalized: dict[str, float] = {}
+    for key in keys:
+        raw = loudness.get(key)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(value):
+            return None
+        normalized[key] = value
+    return normalized

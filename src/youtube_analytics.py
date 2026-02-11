@@ -1,6 +1,9 @@
 import logging
+import time
 from datetime import UTC, datetime
 
+import google_auth_httplib2
+import httplib2
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
@@ -14,22 +17,45 @@ _METRICS_WITH_REACH = (
     "videoThumbnailImpressionsClickRate"
 )
 _METRICS_CORE = "views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage"
+_HTTP_TIMEOUT_SECONDS = 30
+_API_MAX_ATTEMPTS = 3
+_API_BACKOFF_BASE_SECONDS = 0.2
 
 
 def get_analytics_service(client_secrets_file: str, credentials_file: str):
     creds = get_credentials(client_secrets_file, credentials_file)
-    return build("youtubeAnalytics", "v2", credentials=creds)
+    http = google_auth_httplib2.AuthorizedHttp(
+        creds,
+        http=httplib2.Http(timeout=_HTTP_TIMEOUT_SECONDS),
+    )
+    return build("youtubeAnalytics", "v2", http=http, cache_discovery=False)
+
+
+def _execute_request(request):
+    for attempt in range(_API_MAX_ATTEMPTS):
+        try:
+            return request.execute(num_retries=1)
+        except HttpError as e:
+            status = getattr(e.resp, "status", 0)
+            retryable = status >= 500 or status == 429
+            if not retryable or attempt == _API_MAX_ATTEMPTS - 1:
+                raise
+        except Exception:
+            if attempt == _API_MAX_ATTEMPTS - 1:
+                raise
+        time.sleep(_API_BACKOFF_BASE_SECONDS * (2**attempt))
 
 
 def _query_metrics(service, video_id: str, start_date: str, end_date: str, metrics: str) -> dict:
-    return service.reports().query(
+    request = service.reports().query(
         ids="channel==MINE",
         startDate=start_date,
         endDate=end_date,
         metrics=metrics,
         dimensions="video",
         filters=f"video=={video_id}",
-    ).execute()
+    )
+    return _execute_request(request)
 
 
 def _parse_report(response: dict) -> dict | None:

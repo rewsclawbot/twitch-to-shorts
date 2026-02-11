@@ -423,3 +423,81 @@ class TestPresetFast:
         cmd = mock_popen.call_args[0][0]
         preset_idx = cmd.index("-preset")
         assert cmd[preset_idx + 1] == "fast"
+
+
+class TestLoudnessValidation:
+    @patch("src.video_processor.os.replace")
+    @patch("src.video_processor.os.path.getsize", return_value=1024)
+    @patch("src.video_processor.os.path.exists", return_value=True)
+    @patch("src.video_processor.subprocess.Popen")
+    def test_invalid_loudness_nan_falls_back_to_single_pass(self, mock_popen, mock_exists,
+                                                             mock_getsize, mock_replace):
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = (b"", b"")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+
+        loudness = {
+            "input_i": "nan",
+            "input_tp": -1.0,
+            "input_lra": 3.0,
+            "input_thresh": -24.0,
+            "target_offset": 0.1,
+        }
+        _run_ffmpeg("in.mp4", "out.mp4", "scale=1080:1920", "test", gpu=False, loudness=loudness)
+
+        cmd = mock_popen.call_args[0][0]
+        af_idx = cmd.index("-af")
+        af_value = cmd[af_idx + 1]
+        assert af_value == "loudnorm=I=-14:TP=-1.5:LRA=11"
+
+    @patch("src.video_processor.os.replace")
+    @patch("src.video_processor.os.path.getsize", return_value=1024)
+    @patch("src.video_processor.os.path.exists", return_value=True)
+    @patch("src.video_processor.subprocess.Popen")
+    def test_invalid_loudness_missing_key_falls_back_to_single_pass(self, mock_popen, mock_exists,
+                                                                     mock_getsize, mock_replace):
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = (b"", b"")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+
+        loudness = {
+            "input_i": -18.2,
+            "input_tp": -1.0,
+            "input_lra": 3.0,
+            "input_thresh": -24.0,
+            # target_offset missing
+        }
+        _run_ffmpeg("in.mp4", "out.mp4", "scale=1080:1920", "test", gpu=False, loudness=loudness)
+
+        cmd = mock_popen.call_args[0][0]
+        af_idx = cmd.index("-af")
+        af_value = cmd[af_idx + 1]
+        assert af_value == "loudnorm=I=-14:TP=-1.5:LRA=11"
+
+    @patch("src.video_processor.os.replace")
+    @patch("src.video_processor.os.path.getsize", return_value=1024)
+    @patch("src.video_processor.os.path.exists", return_value=True)
+    @patch("src.video_processor.subprocess.Popen")
+    def test_valid_loudness_uses_two_pass(self, mock_popen, mock_exists,
+                                          mock_getsize, mock_replace):
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = (b"", b"")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+
+        loudness = {
+            "input_i": -18.2,
+            "input_tp": -1.0,
+            "input_lra": 3.0,
+            "input_thresh": -24.0,
+            "target_offset": 0.1,
+        }
+        _run_ffmpeg("in.mp4", "out.mp4", "scale=1080:1920", "test", gpu=False, loudness=loudness)
+
+        cmd = mock_popen.call_args[0][0]
+        af_idx = cmd.index("-af")
+        af_value = cmd[af_idx + 1]
+        assert "measured_I=-18.2" in af_value
+        assert "linear=true" in af_value

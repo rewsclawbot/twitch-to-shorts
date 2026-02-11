@@ -22,5 +22,11 @@ disallow_untyped_defs = false
 check_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = ["googleapiclient.*", "google.*", "google_auth_oauthlib.*"]
+module = [
+    "googleapiclient.*",
+    "google.*",
+    "google_auth_oauthlib.*",
+    "google_auth_httplib2.*",
+    "httplib2.*",
+]
 ignore_missing_imports = true

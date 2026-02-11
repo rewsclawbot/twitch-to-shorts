@@ -53,6 +53,21 @@ class TestDownloaderSubprocessSafety:
         assert isinstance(cmd, list), "subprocess.run must be called with a list, not a string"
         # The clip URL should be a single element, not interpolated into a shell command
         assert clip.url in cmd
+        assert "--max-filesize" in cmd
+        assert "250M" in cmd
+
+    @patch("src.downloader.subprocess.run")
+    @patch("src.downloader.os.path.exists", return_value=False)
+    @patch("src.downloader.os.makedirs")
+    def test_rejects_non_twitch_url(self, mock_makedirs, mock_exists, mock_run):
+        from src.downloader import download_clip
+
+        clip = make_clip()
+        clip.url = "https://evil.example.com/not-twitch"
+        result = download_clip(clip, "/tmp/test")
+
+        assert result is None
+        mock_run.assert_not_called()
 
 
 class TestVideoProcessorSubprocessSafety:
