@@ -234,12 +234,16 @@ def _pid_is_running(pid: int) -> bool:
 
         PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
         STILL_ACTIVE = 259
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        windll_ctor = getattr(ctypes, "WinDLL", None)
+        if windll_ctor is None:
+            return False
+        kernel32 = windll_ctor("kernel32", use_last_error=True)
         kernel32.OpenProcess.restype = ctypes.c_void_p
         kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
         handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
         if not handle:
-            err = ctypes.get_last_error()
+            get_last_error = getattr(ctypes, "get_last_error", None)
+            err = int(get_last_error()) if callable(get_last_error) else 0
             # Access denied: assume the process exists to avoid breaking lock safety.
             return err == 5
         try:
