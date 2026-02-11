@@ -150,6 +150,17 @@ Use this data to establish baselines and spot regressions.
 | Feb 9, 14:17 | 17:30 | +3h 13m | Uploaded: YAAAAAAAS |
 | Feb 9, 18:17 | 20:07 | +1h 50m | Uploaded: No |
 | Feb 9, 22:17 | 00:02 | +1h 45m | Uploaded: nick the thief |
+| Feb 10, 02:17 | — | SKIP | Skipped by GitHub (2nd consecutive skip for this slot) |
+| Feb 10, 06:17 | 06:18 | +1m | Uploaded: BLOW THE PEENER |
+| Feb 10, 10:17 | 12:08 | +1h 51m | Uploaded: telling it like it is "true" |
+| Feb 10, ~16:36 | 16:36 | manual | Uploaded: Duplication Glitch (workflow_dispatch) |
+| Feb 10, 14:17 | 17:47 | +3h 30m | Spacing-blocked (manual run at 16:38 was <2h prior) |
+| Feb 10, 18:17 | 20:10 | +1h 53m | Uploaded: glitch |
+| Feb 10, 22:17 | 00:04 | +1h 47m | Uploaded: Tea of 1000 fortunes!! |
+| Feb 11, 02:17 | 06:15 | +3h 58m | Uploaded: PENIS FLARES |
+| Feb 11, 06:17 | 08:07 | +1h 50m | Spacing-blocked (1 uploaded in last 2h) |
+| Feb 11, 10:17 | 12:07 | +1h 50m | Uploaded: 1v3 WITH TFUE |
+| Feb 11, 14:17 | 17:41 | +3h 24m | No upload (`uploaded=0, failed=0`; dedup/spacing expected path) |
 
 **Baseline metrics (20 cron slots observed, pre-offset schedule):**
 - Average delay: ~1h 58m
@@ -159,15 +170,16 @@ Use this data to establish baselines and spot regressions.
 - Effective runs/day: ~5 (expect ~6 with offset schedule)
 - Upload success rate (when triggered, excluding known-fixed bugs): ~80%
 
-**Post-offset baseline (Feb 7-9, 22 slots observed):**
-- Average delay: ~2h 36m (down from ~3h 03m as Feb 9 ran faster)
-- Delay range: 1h 45m to 3h 43m
-- 22:17 UTC skip rate: 50% (2/4 days) — improving, fired on Feb 9
-- 02:17 UTC skip rate: 33% (1/3 days) — first skip observed Feb 9
-- Other slots skip rate: 0%
+**Post-offset baseline (Feb 7-11, through the 14:17 UTC slot, 30 scheduled slots observed):**
+- Average delay: ~2h 15m (improving trend; Feb 10 had a +1m outlier)
+- Delay range: 1m to 3h 58m
+- 02:17 UTC skip rate: 40% (2/5 days) - still the least reliable slot, but no longer dead
+- 22:17 UTC skip rate: 40% (2/5 days) — recovering, fired 3 consecutive days Feb 9-11
+- Other slots (06/10/14/18): 0% skip rate (19/19)
 - Effective runs/day: ~5 (consistent across all observed days)
-- Upload success rate: 100% (22/22 triggered runs uploaded)
+- Scheduled run failure rate: 0% (recent `uploaded=0, failed=0` runs were expected spacing/dedup paths)
 - Failure rate: 0%
+- Manual dispatches: 2 total (Feb 9, Feb 10)
 
 ---
 
