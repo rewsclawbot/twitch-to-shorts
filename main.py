@@ -100,8 +100,23 @@ def validate_config(streamers: list[StreamerConfig], raw_config: dict, dry_run: 
             errors.append(f"Streamer '{name}' missing 'youtube_credentials'")
 
     youtube = raw_config.get("youtube") or {}
+    pipeline_cfg = raw_config.get("pipeline") or {}
+    analytics_enabled = bool(pipeline_cfg.get("analytics_enabled", False))
     if not dry_run and not youtube.get("client_secrets_file"):
         errors.append("Missing youtube.client_secrets_file in config.yaml")
+
+    if analytics_enabled and not dry_run:
+        client_secrets_file = youtube.get("client_secrets_file")
+        if client_secrets_file and not os.path.exists(client_secrets_file):
+            errors.append(
+                f"analytics_enabled=True but youtube.client_secrets_file does not exist: {client_secrets_file}"
+            )
+        for s in streamers:
+            name = s.name or "<unnamed>"
+            if s.youtube_credentials and not os.path.exists(s.youtube_credentials):
+                errors.append(
+                    f"analytics_enabled=True but streamer '{name}' youtube_credentials file does not exist: {s.youtube_credentials}"
+                )
 
     if not os.environ.get("TWITCH_CLIENT_ID"):
         errors.append("Missing Twitch client ID (set TWITCH_CLIENT_ID)")
@@ -322,7 +337,8 @@ def _process_single_clip(clip, yt_service, conn, cfg, streamer, log, dry_run,
     planned_title = None
     if yt_service and not dry_run:
         planned_title = build_upload_title(clip, title_template, title_templates)
-        existing_yt_id = check_channel_for_duplicate(yt_service, planned_title)
+        cache_key = clip.channel_key or streamer.youtube_credentials or streamer.name
+        existing_yt_id = check_channel_for_duplicate(yt_service, planned_title, cache_key=cache_key)
         if existing_yt_id:
             log.warning("Clip %s already on channel as %s — recording and skipping", clip.id, existing_yt_id)
             clip.youtube_id = existing_yt_id
@@ -429,15 +445,33 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
 
     fetched = filtered = downloaded = processed = uploaded = failed = 0
 
+    def _finalize_and_return(quota_exhausted: bool = False):
+        if cfg.analytics_enabled and not dry_run:
+            try:
+                synced = _sync_streamer_metrics(
+                    conn,
+                    name,
+                    client_secrets_file,
+                    streamer.youtube_credentials,
+                    cfg.analytics_min_age_hours,
+                    cfg.analytics_sync_interval_hours,
+                    cfg.analytics_max_videos_per_run,
+                )
+                if synced:
+                    log.info("Synced analytics for %d videos for %s", synced, name)
+            except Exception:
+                log.exception("Analytics sync failed for %s", name)
+        return fetched, filtered, downloaded, processed, uploaded, failed, quota_exhausted
+
     try:
         clips = twitch.fetch_clips(twitch_id, cfg.clip_lookback_hours)
     except Exception:
         log.exception("Failed to fetch clips for %s", name)
-        return fetched, filtered, downloaded, processed, uploaded, failed, False
+        return _finalize_and_return(False)
 
     if not clips:
         log.info("No clips found for %s", name)
-        return fetched, filtered, downloaded, processed, uploaded, failed, False
+        return _finalize_and_return(False)
 
     fetched = len(clips)
 
@@ -467,14 +501,14 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
     log.info("%d new clips after dedup (from %d ranked)", len(new_clips), len(ranked))
 
     if not new_clips:
-        return fetched, filtered, downloaded, processed, uploaded, failed, False
+        return _finalize_and_return(False)
 
     # Upload scheduling: check BEFORE game name fetch to avoid wasted API calls
     recent = recent_upload_count(conn, name, cfg.upload_spacing_hours, channel_key=channel_key)
     uploads_remaining = max(cfg.max_uploads_per_window - recent, 0)
     if uploads_remaining == 0:
         log.info("Skipping uploads for %s: %d uploaded in last %dh", name, recent, cfg.upload_spacing_hours)
-        return fetched, filtered, downloaded, processed, uploaded, failed, False
+        return _finalize_and_return(False)
 
     game_ids = [c.game_id for c in new_clips]
     try:
@@ -494,7 +528,7 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
             )
         except Exception:
             log.exception("Failed to authenticate YouTube for %s", name)
-            return fetched, filtered, downloaded, processed, uploaded, failed, False
+            return _finalize_and_return(False)
 
     quota_exhausted = False
     consecutive_403s = 0
@@ -555,23 +589,7 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
 
     update_streamer_stats(conn, name)
 
-    if cfg.analytics_enabled and not dry_run:
-        try:
-            synced = _sync_streamer_metrics(
-                conn,
-                name,
-                client_secrets_file,
-                streamer.youtube_credentials,
-                cfg.analytics_min_age_hours,
-                cfg.analytics_sync_interval_hours,
-                cfg.analytics_max_videos_per_run,
-            )
-            if synced:
-                log.info("Synced analytics for %d videos for %s", synced, name)
-        except Exception:
-            log.exception("Analytics sync failed for %s", name)
-
-    return fetched, filtered, downloaded, processed, uploaded, failed, quota_exhausted
+    return _finalize_and_return(quota_exhausted)
 
 
 def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], raw_config: dict, conn, log, dry_run: bool = False):

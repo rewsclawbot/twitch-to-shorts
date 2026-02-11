@@ -122,6 +122,7 @@ class TestProcessSingleClip:
         result, _yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
         assert result == "duplicate"
         assert clip.youtube_id == "existing_yt_id"
+        mock_dedup.assert_called_once_with(yt_service, "Test Title", cache_key="creds/test.json")
 
     @patch("main._cleanup_tmp_files")
     @patch("main.upload_short", side_effect=QuotaExhaustedError("quotaExceeded"))
@@ -260,6 +261,47 @@ class TestProcessStreamer:
         )
         _fetched, _filtered, _downloaded, _processed, uploaded, _failed, _quota_exhausted = result
         assert uploaded == 0  # No uploads due to spacing
+
+    @patch("main._sync_streamer_metrics", return_value=2)
+    def test_analytics_sync_runs_when_no_clips(self, mock_sync, conn, cfg, streamer, log):
+        cfg.analytics_enabled = True
+        twitch = MagicMock()
+        twitch.fetch_clips.return_value = []
+
+        result = _process_streamer(
+            streamer, twitch, cfg, conn, log, False,
+            "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
+        )
+        _fetched, _filtered, _downloaded, _processed, uploaded, _failed, quota = result
+        assert uploaded == 0
+        assert quota is False
+        mock_sync.assert_called_once()
+
+    @patch("main._sync_streamer_metrics", return_value=1)
+    @patch("main.recent_upload_count", return_value=1)
+    @patch("main.filter_new_clips")
+    @patch("main.filter_and_rank")
+    def test_analytics_sync_runs_when_spacing_limited(self, mock_rank, mock_dedup, mock_recent,
+                                                      mock_sync, conn, cfg, streamer, log):
+        cfg.analytics_enabled = True
+        cfg.max_uploads_per_window = 1
+        clips = [
+            Clip(id="c1", url="u", title="T", view_count=100,
+                 created_at="2026-01-15T12:00:00Z", duration=30, streamer="teststreamer"),
+        ]
+        twitch = MagicMock()
+        twitch.fetch_clips.return_value = clips
+        mock_rank.return_value = clips
+        mock_dedup.return_value = clips
+
+        result = _process_streamer(
+            streamer, twitch, cfg, conn, log, False,
+            "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
+        )
+        _fetched, _filtered, _downloaded, _processed, uploaded, _failed, quota = result
+        assert uploaded == 0
+        assert quota is False
+        mock_sync.assert_called_once()
 
     @patch("main.update_streamer_stats")
     @patch("main._process_single_clip")
@@ -574,6 +616,30 @@ class TestValidateConfig:
         streamers = [StreamerConfig(name="s", twitch_id="1", youtube_credentials="c.json")]
         raw = {"youtube": {"client_secrets_file": "s.json"}}
         with pytest.raises(ValueError, match="TWITCH_CLIENT_ID"):
+            validate_config(streamers, raw)
+
+    @patch.dict("os.environ", {"TWITCH_CLIENT_ID": "id", "TWITCH_CLIENT_SECRET": "secret"})
+    @patch("main.os.path.exists", return_value=False)
+    def test_analytics_enabled_missing_client_secrets_file_path_raises(self, mock_exists):
+        streamers = [StreamerConfig(name="s", twitch_id="1", youtube_credentials="creds.json")]
+        raw = {
+            "youtube": {"client_secrets_file": "missing-secrets.json"},
+            "pipeline": {"analytics_enabled": True},
+        }
+        with pytest.raises(ValueError, match=r"analytics_enabled=True but youtube\.client_secrets_file does not exist"):
+            validate_config(streamers, raw)
+
+    @patch.dict("os.environ", {"TWITCH_CLIENT_ID": "id", "TWITCH_CLIENT_SECRET": "secret"})
+    @patch("main.os.path.exists")
+    def test_analytics_enabled_missing_streamer_credentials_path_raises(self, mock_exists):
+        # client_secrets_file exists, streamer credentials do not
+        mock_exists.side_effect = lambda p: p == "secrets.json"
+        streamers = [StreamerConfig(name="s", twitch_id="1", youtube_credentials="missing-creds.json")]
+        raw = {
+            "youtube": {"client_secrets_file": "secrets.json"},
+            "pipeline": {"analytics_enabled": True},
+        }
+        with pytest.raises(ValueError, match="analytics_enabled=True but streamer 's' youtube_credentials file does not exist"):
             validate_config(streamers, raw)
 
 

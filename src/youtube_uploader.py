@@ -359,7 +359,8 @@ def check_channel_for_duplicate(service, clip_title: str, max_results: int = 50,
                 pageToken=page_token,
             ).execute()
 
-            for item in pl_resp.get("items", []):
+            items = pl_resp.get("items", [])
+            for item in items:
                 existing_title = item["snippet"].get("title", "")
                 if existing_title == clip_title:
                     video_id = item["snippet"]["resourceId"]["videoId"]
@@ -378,8 +379,13 @@ def check_channel_for_duplicate(service, clip_title: str, max_results: int = 50,
                         pass  # If verify fails, trust the match
                     log.info("Duplicate found on channel: '%s' -> %s", clip_title, video_id)
                     return video_id
-            checked += len(pl_resp.get("items", []))
+            checked += len(items)
             page_token = pl_resp.get("nextPageToken")
+            # Defensive guard: if API returns an empty page with a next token,
+            # break to avoid an infinite pagination loop.
+            if not items and page_token:
+                log.warning("Channel duplicate check got empty page with next token; stopping pagination early")
+                break
             if not page_token:
                 break
         return None

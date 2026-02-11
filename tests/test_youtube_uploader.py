@@ -6,6 +6,8 @@ from src.youtube_uploader import (
     _render_template,
     _sanitize_text,
     _truncate_title,
+    _uploads_playlist_cache,
+    check_channel_for_duplicate,
     upload_short,
     validate_templates,
 )
@@ -198,3 +200,37 @@ class TestUploadShortPrebuiltTitle:
             upload_short(service, "fake_video.mp4", clip, prebuilt_title=None)
 
         mock_build.assert_called_once()
+
+
+class TestChannelDedup:
+    def setup_method(self):
+        _uploads_playlist_cache.clear()
+
+    def test_empty_page_with_next_token_stops_pagination(self):
+        service = MagicMock()
+        service.channels.return_value.list.return_value.execute.return_value = {
+            "items": [{"contentDetails": {"relatedPlaylists": {"uploads": "UPLOADS_1"}}}],
+        }
+        service.playlistItems.return_value.list.return_value.execute.return_value = {
+            "items": [],
+            "nextPageToken": "still-more",
+        }
+
+        result = check_channel_for_duplicate(service, "Title", max_results=50, cache_key="chan-a")
+        assert result is None
+        # Guard should break immediately instead of looping forever.
+        assert service.playlistItems.return_value.list.call_count == 1
+
+    def test_cache_isolated_by_cache_key(self):
+        service = MagicMock()
+        service.channels.return_value.list.return_value.execute.side_effect = [
+            {"items": [{"contentDetails": {"relatedPlaylists": {"uploads": "UPLOADS_A"}}}]},
+            {"items": [{"contentDetails": {"relatedPlaylists": {"uploads": "UPLOADS_B"}}}]},
+        ]
+        service.playlistItems.return_value.list.return_value.execute.return_value = {"items": []}
+
+        check_channel_for_duplicate(service, "Title A", cache_key="channel-a")
+        check_channel_for_duplicate(service, "Title B", cache_key="channel-b")
+
+        # Different keys should not share cached uploads playlist IDs.
+        assert service.channels.return_value.list.call_count == 2
