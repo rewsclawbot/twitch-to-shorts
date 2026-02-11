@@ -1,6 +1,7 @@
 import logging
 import time
 from datetime import UTC, datetime
+from typing import Any, cast
 
 import google_auth_httplib2
 import httplib2
@@ -31,10 +32,10 @@ def get_analytics_service(client_secrets_file: str, credentials_file: str):
     return build("youtubeAnalytics", "v2", http=http, cache_discovery=False)
 
 
-def _execute_request(request):
+def _execute_request(request) -> dict[str, Any]:
     for attempt in range(_API_MAX_ATTEMPTS):
         try:
-            return request.execute(num_retries=1)
+            return cast(dict[str, Any], request.execute(num_retries=1))
         except HttpError as e:
             status = getattr(e.resp, "status", 0)
             retryable = status >= 500 or status == 429
@@ -44,9 +45,10 @@ def _execute_request(request):
             if attempt == _API_MAX_ATTEMPTS - 1:
                 raise
         time.sleep(_API_BACKOFF_BASE_SECONDS * (2**attempt))
+    raise RuntimeError("unreachable")
 
 
-def _query_metrics(service, video_id: str, start_date: str, end_date: str, metrics: str) -> dict:
+def _query_metrics(service, video_id: str, start_date: str, end_date: str, metrics: str) -> dict[str, Any]:
     request = service.reports().query(
         ids="channel==MINE",
         startDate=start_date,
@@ -55,7 +57,8 @@ def _query_metrics(service, video_id: str, start_date: str, end_date: str, metri
         dimensions="video",
         filters=f"video=={video_id}",
     )
-    return _execute_request(request)
+    response = _execute_request(request)
+    return response if isinstance(response, dict) else {}
 
 
 def _parse_report(response: dict) -> dict | None:

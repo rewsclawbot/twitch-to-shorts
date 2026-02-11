@@ -215,6 +215,7 @@ def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
     source_ratio = (dims[0] / dims[1]) if dims else (16 / 9)
 
     if use_facecam and abs(source_ratio - 16 / 9) < 0.1:
+        assert facecam is not None
         vf = _build_composite_filter(facecam)
     elif use_facecam:
         log.info("Skipping facecam overlay for %s: non-16:9 source (%.2f)", clip_id, source_ratio)
@@ -450,6 +451,8 @@ def _normalize_loudness_stats(loudness: dict | None) -> dict[str, float] | None:
     normalized: dict[str, float] = {}
     for key in keys:
         raw = loudness.get(key)
+        if raw is None:
+            return None
         try:
             value = float(raw)
         except (TypeError, ValueError):

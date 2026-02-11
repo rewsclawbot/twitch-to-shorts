@@ -6,6 +6,7 @@ import re
 import string
 import sys
 import time
+from typing import Any
 
 import httplib2
 from google.auth.exceptions import RefreshError
@@ -49,8 +50,10 @@ class AuthenticationError(Exception):
 def _extract_error_reason(err: HttpError) -> str:
     if isinstance(err.error_details, list):
         for detail in err.error_details:
+            if not isinstance(detail, dict):
+                continue
             reason = detail.get("reason", "")
-            if reason:
+            if isinstance(reason, str) and reason:
                 return reason
     return ""
 
@@ -306,7 +309,9 @@ def upload_short(
         if response is None:
             raise RuntimeError("Upload did not complete after maximum chunk attempts")
 
-        video_id = response["id"]
+        video_id = response.get("id") if isinstance(response, dict) else None
+        if not isinstance(video_id, str):
+            raise RuntimeError("Upload response missing video id")
         log.info("Upload successful: https://youtube.com/shorts/%s", video_id)
         return video_id
     except HttpError as e:
@@ -363,7 +368,10 @@ def check_channel_for_duplicate(service, clip_title: str, max_results: int = 50,
             for item in items:
                 existing_title = item["snippet"].get("title", "")
                 if existing_title == clip_title:
-                    video_id = item["snippet"]["resourceId"]["videoId"]
+                    video_id_raw: Any = item["snippet"]["resourceId"]["videoId"]
+                    if not isinstance(video_id_raw, str):
+                        continue
+                    video_id = video_id_raw
                     # Verify video is actually live/processing (not a ghost from failed upload)
                     try:
                         v_resp = service.videos().list(part="status", id=video_id).execute()
@@ -409,7 +417,8 @@ def verify_upload(service, video_id: str) -> bool:
         if not items:
             log.error("Uploaded video %s not found via API", video_id)
             return False
-        status = items[0]["status"]["uploadStatus"]
+        status_raw: Any = items[0]["status"].get("uploadStatus")
+        status = status_raw if isinstance(status_raw, str) else ""
         if status in ("uploaded", "processed"):
             return True
         log.warning("Video %s has unexpected status: %s", video_id, status)

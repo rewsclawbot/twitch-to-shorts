@@ -8,7 +8,7 @@ from src.media_utils import extract_audio, safe_remove
 from src.models import CaptionWord
 
 try:
-    from deepgram import DeepgramClient, FileSource, PrerecordedOptions
+    from deepgram import DeepgramClient, FileSource, PrerecordedOptions  # type: ignore[import-not-found]
 except ImportError:
     DeepgramClient = None
     FileSource = None

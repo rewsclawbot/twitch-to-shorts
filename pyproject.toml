@@ -23,10 +23,12 @@ check_untyped_defs = true
 
 [[tool.mypy.overrides]]
 module = [
+    "deepgram",
     "googleapiclient.*",
     "google.*",
     "google_auth_oauthlib.*",
     "google_auth_httplib2.*",
     "httplib2.*",
+    "deepgram.*",
 ]
 ignore_missing_imports = true

@@ -46,7 +46,7 @@ LOCK_FILE = os.path.join("data", "pipeline.lock")
 
 
 def setup_logging(log_file: str | None = None):
-    handlers = [logging.StreamHandler(sys.stdout)]
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     if log_file:
         os.makedirs(os.path.dirname(log_file), exist_ok=True)
         handlers.append(

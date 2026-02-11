@@ -322,13 +322,13 @@ def get_streamer_performance_multiplier(conn: sqlite3.Connection, streamer: str)
     ).fetchone()
     if not row or row["cnt"] < 20:
         return 1.0
-    avg_ctr = row["avg_ctr"]
-    if avg_ctr is None or avg_ctr <= 0:
+    avg_ctr_raw = row["avg_ctr"]
+    if not isinstance(avg_ctr_raw, (int, float)) or avg_ctr_raw <= 0:
         return 1.0
+    avg_ctr = float(avg_ctr_raw)
     # Baseline CTR for Shorts is ~2%. Scale linearly: 2% -> 1.0, 4% -> 1.5, 1% -> 0.75
     # Clamped to [0.5, 2.0] to avoid extreme swings
     baseline_ctr = 0.02
     multiplier = 0.5 + 0.5 * (avg_ctr / baseline_ctr)
     return max(0.5, min(2.0, multiplier))
-
 

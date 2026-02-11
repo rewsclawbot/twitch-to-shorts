@@ -7,6 +7,7 @@ import os
 import tempfile
 import time
 from datetime import date, datetime
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import google_auth_httplib2
@@ -41,10 +42,10 @@ def get_reporting_service(client_secrets_file: str, credentials_file: str):
     return build("youtubereporting", "v1", http=http, cache_discovery=False)
 
 
-def _execute_request(request):
+def _execute_request(request) -> dict[str, Any]:
     for attempt in range(_API_MAX_ATTEMPTS):
         try:
-            return request.execute(num_retries=1)
+            return cast(dict[str, Any], request.execute(num_retries=1))
         except HttpError as e:
             status = getattr(e.resp, "status", 0)
             retryable = status >= 500 or status == 429
@@ -54,6 +55,7 @@ def _execute_request(request):
             if attempt == _API_MAX_ATTEMPTS - 1:
                 raise
         time.sleep(_API_BACKOFF_BASE_SECONDS * (2**attempt))
+    raise RuntimeError("unreachable")
 
 
 def fetch_reach_metrics(
@@ -143,7 +145,9 @@ def _ensure_job(service, report_type_id: str) -> str | None:
     except HttpError:
         log.warning("Unable to create reporting job for %s", report_type_id, exc_info=True)
         return None
-    job_id = response.get("id")
+    job_id = response.get("id") if isinstance(response, dict) else None
+    if job_id is not None and not isinstance(job_id, str):
+        return None
     if job_id:
         log.info("Created YouTube reporting job %s (%s)", job_id, report_type_id)
     return job_id
@@ -153,7 +157,7 @@ def _list_jobs(service) -> list[dict]:
     jobs: list[dict] = []
     page_token = None
     for _ in range(100):
-        params = {}
+        params: dict[str, str] = {}
         if page_token:
             params["pageToken"] = page_token
         try:

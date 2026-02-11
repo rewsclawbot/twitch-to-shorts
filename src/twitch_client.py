@@ -66,6 +66,8 @@ class TwitchClient:
             if resp.status_code == 429:
                 reset = resp.headers.get("Ratelimit-Reset")
                 try:
+                    if reset is None:
+                        raise ValueError
                     wait = min(max(int(reset) - int(time.time()), 1), 60)
                 except (ValueError, TypeError):
                     wait = 5

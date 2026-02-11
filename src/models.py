@@ -97,12 +97,12 @@ class PipelineConfig:
             ("velocity_weight", self.velocity_weight),
             ("title_quality_weight", self.title_quality_weight),
         ]
-        for name, value in float_fields:
-            if not isinstance(value, (int, float)):
+        for name, numeric_value in float_fields:
+            if not isinstance(numeric_value, (int, float)):
                 try:
-                    setattr(self, name, float(value))
+                    setattr(self, name, float(numeric_value))
                 except (TypeError, ValueError):
-                    errors.append(f"{name} must be a number, got {value!r}")
+                    errors.append(f"{name} must be a number, got {numeric_value!r}")
                     continue
             if getattr(self, name) < 0:
                 errors.append(f"{name} must be non-negative, got {getattr(self, name)}")
