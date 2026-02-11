@@ -526,9 +526,9 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
                 client_secrets_file,
                 streamer.youtube_credentials,
             )
-        except Exception:
+        except Exception as e:
             log.exception("Failed to authenticate YouTube for %s", name)
-            return _finalize_and_return(False)
+            raise RuntimeError(f"YouTube authentication failed for streamer '{name}'") from e
 
     quota_exhausted = False
     consecutive_403s = 0
@@ -630,7 +630,6 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
     total_processed = 0
     total_uploaded = 0
     total_failed = 0
-
     for streamer in streamers:
         fetched, filtered, downloaded, processed, uploaded, failed, quota_exhausted = _process_streamer(
             streamer, twitch, cfg, conn, log, dry_run,

@@ -89,12 +89,19 @@ def get_credentials(client_secrets_file: str, credentials_file: str) -> Credenti
                 creds.refresh(Request())
             except RefreshError:
                 log.error(
-                    "YouTube refresh token expired or revoked for %s. "
-                    "Delete the token file and re-authenticate.",
+                    "YouTube refresh token expired or revoked for %s.",
                     credentials_file,
                 )
-                raise
-        else:
+                if not sys.stdin.isatty():
+                    log.error(
+                        "Cannot recover revoked token in non-interactive mode. "
+                        "Re-authenticate locally and update the token secret."
+                    )
+                    raise
+                log.info("Attempting interactive OAuth re-authentication for %s", credentials_file)
+                creds = None
+
+        if not creds or not creds.valid:
             if not sys.stdin.isatty():
                 log.error(
                     "OAuth flow requires interactive terminal but stdin is not a TTY. "
