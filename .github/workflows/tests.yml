@@ -30,5 +30,4 @@ jobs:
         run: python -m ruff check .
 
       - name: Run Mypy
-        continue-on-error: true
         run: python -m mypy main.py src
