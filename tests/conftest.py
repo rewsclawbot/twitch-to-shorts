@@ -28,6 +28,7 @@ def make_clip(
     youtube_id=None,
     vod_id=None,
     vod_offset=None,
+    instagram_id=None,
 ) -> Clip:
     """Factory for Clip dataclass instances."""
     if created_at is None:
@@ -42,6 +43,7 @@ def make_clip(
         game_id=game_id,
         streamer=streamer,
         youtube_id=youtube_id,
+        instagram_id=instagram_id,
         vod_id=vod_id,
         vod_offset=vod_offset,
     )

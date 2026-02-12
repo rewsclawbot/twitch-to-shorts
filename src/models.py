@@ -15,6 +15,7 @@ class Clip:
     game_name: str = ""
     score: float = 0.0
     youtube_id: str | None = None
+    instagram_id: str | None = None
     vod_id: str | None = None
     vod_offset: int | None = None
 
@@ -47,6 +48,7 @@ class StreamerConfig:
     category_id: str = "20"
     extra_tags: list[str] | None = None
     captions: bool | None = None
+    instagram_credentials: str | None = None
 
 
 @dataclass
@@ -66,6 +68,7 @@ class PipelineConfig:
     max_uploads_per_window: int = 1
     analytics_enabled: bool = False
     captions_enabled: bool = False
+    instagram_enabled: bool = False
     analytics_min_age_hours: int = 48
     analytics_sync_interval_hours: int = 24
     analytics_max_videos_per_run: int = 20
@@ -108,6 +111,7 @@ class PipelineConfig:
                 errors.append(f"{name} must be non-negative, got {getattr(self, name)}")
 
         self.captions_enabled = bool(self.captions_enabled)
+        self.instagram_enabled = bool(self.instagram_enabled)
 
         if self.age_decay not in ("linear", "log"):
             errors.append(f"age_decay must be 'linear' or 'log', got {self.age_decay!r}")

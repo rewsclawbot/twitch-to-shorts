@@ -171,3 +171,63 @@ System:                 ffmpeg, ffprobe, yt-dlp (PATH)
 - **Consecutive 403s**: 3 consecutive upload failures skip remaining clips for that streamer
 - **Quota errors**: `QuotaExhaustedError` breaks the entire pipeline run (all streamers)
 - **Auth errors**: `AuthenticationError` breaks the current streamer, pipeline raises `RuntimeError`
+
+## Instagram Reels Integration
+
+The pipeline can optionally upload processed clips to Instagram Reels in addition to YouTube Shorts. The existing 9:16 MP4 output is already compatible with Instagram's requirements.
+
+### Prerequisites
+
+1. **Instagram Business/Creator Account** linked to a Facebook Page
+2. **Meta Developer App** at [developers.facebook.com](https://developers.facebook.com)
+3. Required permissions: `instagram_content_publish`, `instagram_basic`, `pages_show_list`
+
+### Token Setup
+
+1. Generate a short-lived token via [Graph API Explorer](https://developers.facebook.com/tools/explorer/)
+2. Exchange for a long-lived token (60-day validity):
+   ```
+   GET https://graph.instagram.com/access_token?grant_type=ig_exchange_token&client_secret={APP_SECRET}&access_token={SHORT_LIVED_TOKEN}
+   ```
+3. Save credentials as JSON:
+   ```json
+   {
+     "access_token": "IGQV...",
+     "ig_user_id": "17841400000000000",
+     "token_expiry": "2026-04-11T00:00:00Z"
+   }
+   ```
+4. Base64-encode and set as GitHub secret:
+   ```bash
+   base64 -w0 credentials/theburntpeanut_instagram.json | gh secret set INSTAGRAM_TOKEN_THEBURNTPEANUT
+   ```
+
+### Configuration
+
+In `config.yaml`:
+```yaml
+instagram:
+  caption_templates:
+    - "{title}"
+    - "{title} | {streamer}"
+  hashtags:
+    - "#gaming"
+    - "#twitch"
+    - "#clips"
+
+pipeline:
+  instagram_enabled: true
+
+streamers:
+  - name: "TheBurntPeanut"
+    instagram_credentials: "credentials/theburntpeanut_instagram.json"
+```
+
+### How It Works
+
+- Instagram uses a **pull model**: the API fetches video from a public URL
+- Pipeline creates a temporary GitHub Release as the public URL source
+- Flow: create temp release -> create reel container -> poll status -> publish -> delete temp release
+- Instagram upload is **independent** of YouTube: IG failures never block YT uploads
+- Long-lived tokens auto-refresh when within 7 days of expiry
+- Instagram rate limit: 25 posts per 24 hours (enforced by API, tracked in DB)
