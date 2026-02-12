@@ -23,6 +23,16 @@ youtube:
   # thumbnail_samples: 8
   # thumbnail_width: 1280
 
+instagram:
+  caption_templates:
+    - "{title}"
+    - "{title} | {streamer}"
+  hashtags:
+    - "#gaming"
+    - "#twitch"
+    - "#clips"
+    - "#highlights"
+
 streamers:
   - name: "TheBurntPeanut"
     twitch_id: "472066926"
@@ -37,6 +47,7 @@ streamers:
     # extra_tags: ["TheBurntPeanut", "FPS"]
     privacy_status: "public"
     category_id: "20"
+    # instagram_credentials: "credentials/theburntpeanut_instagram.json"
   # Add more streamers here:
   # - name: "shroud"
   #   twitch_id: "37402112"
@@ -55,10 +66,11 @@ pipeline:
   tmp_dir: "data/tmp"
   db_path: "data/clips.db"
   log_file: "data/pipeline.log"
-  upload_spacing_hours: 2
+  upload_spacing_hours: 1
   max_uploads_per_window: 1
   # Analytics sync (optional)
   analytics_enabled: true
+  instagram_enabled: false  # Set true after Instagram token setup
   analytics_min_age_hours: 24
   analytics_sync_interval_hours: 24
   analytics_max_videos_per_run: 20
@@ -66,7 +78,6 @@ pipeline:
 # Captions (burned-in subtitles -- requires DEEPGRAM_API_KEY env var)
 # captions:
 #   enabled: false
-
 
 
 

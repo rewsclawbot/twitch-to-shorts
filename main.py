@@ -20,12 +20,18 @@ from src.db import (  # noqa: E402
     insert_clip,
     recent_upload_count,
     record_known_clip,
+    update_instagram_id,
     update_streamer_stats,
     update_youtube_metrics,
     update_youtube_reach_metrics,
 )
 from src.dedup import filter_new_clips  # noqa: E402
 from src.downloader import download_clip  # noqa: E402
+from src.instagram_uploader import (  # noqa: E402
+    InstagramAuthError,
+    InstagramRateLimitError,
+    upload_reel,
+)
 from src.models import FacecamConfig, PipelineConfig, StreamerConfig  # noqa: E402
 from src.twitch_client import TwitchClient  # noqa: E402
 from src.video_processor import crop_to_vertical, detect_leading_silence, extract_thumbnail  # noqa: E402
@@ -117,6 +123,13 @@ def validate_config(streamers: list[StreamerConfig], raw_config: dict, dry_run: 
                 errors.append(
                     f"analytics_enabled=True but streamer '{name}' youtube_credentials file does not exist: {s.youtube_credentials}"
                 )
+
+    pipeline_cfg_instagram = bool(pipeline_cfg.get("instagram_enabled", False))
+    if pipeline_cfg_instagram:
+        for s in streamers:
+            name = s.name or "<unnamed>"
+            if not getattr(s, 'instagram_credentials', None):
+                log.warning("instagram_enabled=True but streamer '%s' has no instagram_credentials", name)
 
     if not os.environ.get("TWITCH_CLIENT_ID"):
         errors.append("Missing Twitch client ID (set TWITCH_CLIENT_ID)")
@@ -316,11 +329,68 @@ def release_lock():
         os.remove(LOCK_FILE)
 
 
+def write_github_summary(run_result: dict, conn):
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+
+    from src.db import get_todays_runs
+
+    today_runs = get_todays_runs(conn)
+    today_uploaded = sum((row["total_uploaded"] or 0) for row in today_runs)
+    today_failed = sum((row["total_failed"] or 0) for row in today_runs)
+
+    totals = run_result["totals"]
+    lines = [
+        "## Pipeline Run Summary",
+        "",
+        f"| Metric | This Run | Today ({len(today_runs)} runs) |",
+        "|--------|----------|-------------------------|",
+        f"| Uploaded | {totals['uploaded']} | {today_uploaded} |",
+        f"| Failed | {totals['failed']} | {today_failed} |",
+        f"| Fetched | {totals['fetched']} | - |",
+        f"| Filtered | {totals['filtered']} | - |",
+        "",
+    ]
+
+    streamer_results = run_result.get("streamer_results") or []
+    if streamer_results:
+        lines += [
+            "### Per-Streamer Detail",
+            "",
+            "| Streamer | Uploaded | Failed | Skip Reason |",
+            "|----------|----------|--------|-------------|",
+        ]
+        for sr in streamer_results:
+            lines.append(
+                f"| {sr['streamer']} | {sr['uploaded']} | {sr['failed']} | {sr['skip_reason'] or '-'} |"
+            )
+        lines.append("")
+
+    if len(today_runs) > 1:
+        lines += [
+            "### Today's Runs",
+            "",
+            "| Time (UTC) | Uploaded | Failed | Trigger |",
+            "|------------|----------|--------|---------|",
+        ]
+        for row in today_runs:
+            lines.append(
+                f"| {row['started_at'][:19]} | {row['total_uploaded']} | {row['total_failed']} | {row['trigger']} |"
+            )
+        lines.append("")
+
+    with open(summary_path, "a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
 def run_pipeline(pipeline: PipelineConfig, streamers: list[StreamerConfig], raw_config: dict, dry_run: bool = False):
     log = logging.getLogger("pipeline")
     conn = get_connection(pipeline.db_path)
     try:
-        _run_pipeline_inner(pipeline, streamers, raw_config, conn, log, dry_run=dry_run)
+        result = _run_pipeline_inner(pipeline, streamers, raw_config, conn, log, dry_run=dry_run)
+        if result:
+            write_github_summary(result, conn)
     finally:
         try:
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -334,7 +404,10 @@ def _process_single_clip(clip, yt_service, conn, cfg, streamer, log, dry_run,
                          title_template, title_templates, description_template,
                          description_templates, extra_tags_global,
                          thumbnail_enabled, thumbnail_samples, thumbnail_width,
-                         captions_enabled=False):
+                         captions_enabled=False,
+                         ig_credentials=None, ig_caption_template=None,
+                         ig_caption_templates=None, ig_hashtags=None,
+                         ig_rate_limited_state=None):
     """Process a single clip: download, crop, upload, verify, thumbnail.
 
     Returns a tuple of (result, youtube_id) where result is one of:
@@ -427,6 +500,28 @@ def _process_single_clip(clip, yt_service, conn, cfg, streamer, log, dry_run,
     insert_clip(conn, clip)
     log.info("Uploaded clip %s -> YouTube %s", clip.id, youtube_id)
 
+    # --- Instagram Upload (independent, failure does not block YouTube) ---
+    if ig_credentials and cfg.instagram_enabled:
+        try:
+            ig_media_id = upload_reel(
+                vertical_path, clip, ig_credentials,
+                caption_template=ig_caption_template,
+                caption_templates=ig_caption_templates,
+                hashtags=ig_hashtags,
+                prebuilt_title=planned_title,
+            )
+            if ig_media_id:
+                update_instagram_id(conn, clip.id, ig_media_id)
+                log.info("Uploaded clip %s -> Instagram %s", clip.id, ig_media_id)
+        except InstagramAuthError:
+            log.error("Instagram auth failed for %s", clip.id)
+        except InstagramRateLimitError:
+            log.warning("Instagram rate limit hit, skipping remaining IG uploads")
+            if isinstance(ig_rate_limited_state, list) and ig_rate_limited_state:
+                ig_rate_limited_state[0] = True
+        except Exception:
+            log.exception("Instagram upload failed for %s", clip.id)
+
     if thumbnail_enabled:
         thumbnail_path = extract_thumbnail(
             vertical_path,
@@ -445,10 +540,13 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
                       client_secrets_file, title_template, title_templates,
                       description_template, description_templates,
                       extra_tags_global, thumbnail_enabled, thumbnail_samples,
-                      thumbnail_width, captions_enabled=False):
+                      thumbnail_width, captions_enabled=False,
+                      ig_caption_template=None, ig_caption_templates=None,
+                      ig_hashtags=None):
     """Process all clips for a single streamer.
 
-    Returns a tuple of (fetched, filtered, downloaded, processed, uploaded, failed, quota_exhausted).
+    Returns a tuple of
+    (fetched, filtered, downloaded, processed, uploaded, failed, quota_exhausted, skip_reason).
     """
     name = streamer.name
     twitch_id = streamer.twitch_id
@@ -459,6 +557,7 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
     log.info("=== Processing streamer: %s ===", name)
 
     fetched = filtered = downloaded = processed = uploaded = failed = 0
+    skip_reason = None
 
     def _finalize_and_return(quota_exhausted: bool = False):
         if cfg.analytics_enabled and not dry_run:
@@ -476,16 +575,18 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
                     log.info("Synced analytics for %d videos for %s", synced, name)
             except Exception:
                 log.exception("Analytics sync failed for %s", name)
-        return fetched, filtered, downloaded, processed, uploaded, failed, quota_exhausted
+        return fetched, filtered, downloaded, processed, uploaded, failed, quota_exhausted, skip_reason
 
     try:
         clips = twitch.fetch_clips(twitch_id, cfg.clip_lookback_hours)
     except Exception:
         log.exception("Failed to fetch clips for %s", name)
+        skip_reason = "fetch_error"
         return _finalize_and_return(False)
 
     if not clips:
         log.info("No clips found for %s", name)
+        skip_reason = "no_clips"
         return _finalize_and_return(False)
 
     fetched = len(clips)
@@ -516,6 +617,7 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
     log.info("%d new clips after dedup (from %d ranked)", len(new_clips), len(ranked))
 
     if not new_clips:
+        skip_reason = "no_new_clips"
         return _finalize_and_return(False)
 
     # Upload scheduling: check BEFORE game name fetch to avoid wasted API calls
@@ -523,6 +625,7 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
     uploads_remaining = max(cfg.max_uploads_per_window - recent, 0)
     if uploads_remaining == 0:
         log.info("Skipping uploads for %s: %d uploaded in last %dh", name, recent, cfg.upload_spacing_hours)
+        skip_reason = "spacing_limited"
         return _finalize_and_return(False)
 
     game_ids = [c.game_id for c in new_clips]
@@ -547,6 +650,7 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
 
     quota_exhausted = False
     consecutive_403s = 0
+    ig_rate_limited_state = [False]
     for clip in new_clips:
         if uploads_remaining <= 0:
             break
@@ -557,6 +661,11 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
             description_templates, extra_tags_global,
             thumbnail_enabled, thumbnail_samples, thumbnail_width,
             captions_enabled=captions_enabled,
+            ig_credentials=streamer.instagram_credentials if not ig_rate_limited_state[0] else None,
+            ig_caption_template=ig_caption_template,
+            ig_caption_templates=ig_caption_templates,
+            ig_hashtags=ig_hashtags,
+            ig_rate_limited_state=ig_rate_limited_state,
         )
 
         if result == "downloaded_fail":
@@ -639,33 +748,83 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
     if isinstance(extra_tags_global, str):
         extra_tags_global = [extra_tags_global]
 
+    ig_cfg = raw_config.get("instagram") or {}
+    ig_caption_template = ig_cfg.get("caption_template")
+    ig_caption_templates = ig_cfg.get("caption_templates")
+    ig_hashtags = ig_cfg.get("hashtags")
+    if isinstance(ig_caption_templates, str):
+        ig_caption_templates = [ig_caption_templates]
+    if isinstance(ig_hashtags, str):
+        ig_hashtags = [ig_hashtags]
+
     total_fetched = 0
     total_filtered = 0
     total_downloaded = 0
     total_processed = 0
     total_uploaded = 0
     total_failed = 0
-    for streamer in streamers:
-        fetched, filtered, downloaded, processed, uploaded, failed, quota_exhausted = _process_streamer(
-            streamer, twitch, cfg, conn, log, dry_run,
-            client_secrets_file, title_template, title_templates,
-            description_template, description_templates,
-            extra_tags_global, thumbnail_enabled, thumbnail_samples,
-            thumbnail_width, captions_enabled=captions_enabled,
-        )
-        total_fetched += fetched
-        total_filtered += filtered
-        total_downloaded += downloaded
-        total_processed += processed
-        total_uploaded += uploaded
-        total_failed += failed
-        if quota_exhausted:
-            break
+    from src.db import finish_pipeline_run, insert_pipeline_run
 
-    log.info(
-        "Pipeline complete: fetched=%d filtered=%d downloaded=%d processed=%d uploaded=%d failed=%d",
-        total_fetched, total_filtered, total_downloaded, total_processed, total_uploaded, total_failed,
-    )
+    started_at = datetime.now(UTC).isoformat()
+    trigger = os.environ.get("PIPELINE_TRIGGER", "local")
+    run_id = insert_pipeline_run(conn, started_at, trigger)
+    streamer_results = []
+
+    def _totals() -> dict:
+        return {
+            "fetched": total_fetched,
+            "filtered": total_filtered,
+            "downloaded": total_downloaded,
+            "processed": total_processed,
+            "uploaded": total_uploaded,
+            "failed": total_failed,
+        }
+
+    try:
+        for streamer in streamers:
+            fetched, filtered, downloaded, processed, uploaded, failed, quota_exhausted, skip_reason = _process_streamer(
+                streamer, twitch, cfg, conn, log, dry_run,
+                client_secrets_file, title_template, title_templates,
+                description_template, description_templates,
+                extra_tags_global, thumbnail_enabled, thumbnail_samples,
+                thumbnail_width, captions_enabled=captions_enabled,
+                ig_caption_template=ig_caption_template,
+                ig_caption_templates=ig_caption_templates,
+                ig_hashtags=ig_hashtags,
+            )
+            total_fetched += fetched
+            total_filtered += filtered
+            total_downloaded += downloaded
+            total_processed += processed
+            total_uploaded += uploaded
+            total_failed += failed
+            streamer_results.append({
+                "streamer": streamer.name,
+                "fetched": fetched,
+                "filtered": filtered,
+                "downloaded": downloaded,
+                "processed": processed,
+                "uploaded": uploaded,
+                "failed": failed,
+                "skip_reason": skip_reason,
+            })
+            if quota_exhausted:
+                break
+
+        log.info(
+            "Pipeline complete: fetched=%d filtered=%d downloaded=%d processed=%d uploaded=%d failed=%d",
+            total_fetched, total_filtered, total_downloaded, total_processed, total_uploaded, total_failed,
+        )
+        finish_pipeline_run(conn, run_id, datetime.now(UTC).isoformat(), _totals(), streamer_results)
+    except Exception:
+        finish_pipeline_run(conn, run_id, datetime.now(UTC).isoformat(), _totals(), streamer_results)
+        raise
+
+    return {
+        "run_id": run_id,
+        "totals": _totals(),
+        "streamer_results": streamer_results,
+    }
 
 
 def main():

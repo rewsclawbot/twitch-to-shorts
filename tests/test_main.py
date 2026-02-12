@@ -5,6 +5,7 @@ pipeline flow with all external services mocked.
 """
 
 import sqlite3
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -15,8 +16,10 @@ from main import (
     _run_pipeline_inner,
     _sync_streamer_metrics,
     validate_config,
+    write_github_summary,
 )
-from src.db import init_schema
+from src.db import finish_pipeline_run, init_schema, insert_pipeline_run
+from src.instagram_uploader import InstagramAuthError, InstagramRateLimitError
 from src.models import Clip, PipelineConfig, StreamerConfig
 from src.youtube_uploader import AuthenticationError, ForbiddenError, QuotaExhaustedError
 
@@ -227,6 +230,140 @@ class TestProcessSingleClip:
         mock_set_thumb.assert_called_once_with(yt_service, "yt_abc123", "/tmp/test/thumb.jpg")
 
 
+
+class TestProcessSingleClipInstagram:
+    """Tests for Instagram upload integration in _process_single_clip."""
+
+    def _call(self, clip, yt_service, conn, cfg, streamer, log, dry_run=False,
+              ig_credentials="creds/ig.json"):
+        return _process_single_clip(
+            clip, yt_service, conn, cfg, streamer, log, dry_run,
+            title_template=None, title_templates=None,
+            description_template=None, description_templates=None,
+            extra_tags_global=[],
+            thumbnail_enabled=False, thumbnail_samples=8, thumbnail_width=1280,
+            ig_credentials=ig_credentials,
+            ig_caption_template=None, ig_caption_templates=None, ig_hashtags=None,
+        )
+
+    @patch("main.update_instagram_id")
+    @patch("main.upload_reel", return_value="ig_media_123")
+    @patch("main._cleanup_tmp_files")
+    @patch("main.upload_short", return_value="yt_abc123")
+    @patch("main.check_channel_for_duplicate", return_value=None)
+    @patch("main.build_upload_title", return_value="Test Title")
+    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    def test_instagram_uploads_after_youtube(self, mock_dl, mock_crop, mock_title,
+                                              mock_dedup, mock_upload, mock_clean,
+                                              mock_ig_upload, mock_ig_update,
+                                              clip, yt_service, conn, cfg, streamer, log):
+        cfg.instagram_enabled = True
+        result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
+        assert result == "uploaded"
+        assert yt_id == "yt_abc123"
+        mock_ig_upload.assert_called_once()
+        mock_ig_update.assert_called_once_with(conn, clip.id, "ig_media_123")
+
+    @patch("main.upload_reel", side_effect=InstagramAuthError("bad token"))
+    @patch("main._cleanup_tmp_files")
+    @patch("main.upload_short", return_value="yt_abc123")
+    @patch("main.check_channel_for_duplicate", return_value=None)
+    @patch("main.build_upload_title", return_value="Test Title")
+    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    def test_instagram_auth_error_doesnt_block_youtube(self, mock_dl, mock_crop, mock_title,
+                                                        mock_dedup, mock_upload, mock_clean,
+                                                        mock_ig_upload,
+                                                        clip, yt_service, conn, cfg, streamer, log):
+        cfg.instagram_enabled = True
+        result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
+        assert result == "uploaded"
+        assert yt_id == "yt_abc123"
+
+    @patch("main.upload_reel", side_effect=InstagramRateLimitError("429"))
+    @patch("main._cleanup_tmp_files")
+    @patch("main.upload_short", return_value="yt_abc123")
+    @patch("main.check_channel_for_duplicate", return_value=None)
+    @patch("main.build_upload_title", return_value="Test Title")
+    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    def test_instagram_rate_limit_sets_state(self, mock_dl, mock_crop, mock_title,
+                                              mock_dedup, mock_upload, mock_clean,
+                                              mock_ig_upload,
+                                              clip, yt_service, conn, cfg, streamer, log):
+        cfg.instagram_enabled = True
+        ig_state = [False]
+        result, yt_id = _process_single_clip(
+            clip, yt_service, conn, cfg, streamer, log, False,
+            title_template=None, title_templates=None,
+            description_template=None, description_templates=None,
+            extra_tags_global=[],
+            thumbnail_enabled=False, thumbnail_samples=8, thumbnail_width=1280,
+            ig_credentials="creds/ig.json",
+            ig_caption_template=None, ig_caption_templates=None, ig_hashtags=None,
+            ig_rate_limited_state=ig_state,
+        )
+        assert result == "uploaded"
+        assert yt_id == "yt_abc123"
+        assert ig_state[0] is True
+
+    @patch("main.upload_reel", side_effect=Exception("IG crash"))
+    @patch("main._cleanup_tmp_files")
+    @patch("main.upload_short", return_value="yt_abc123")
+    @patch("main.check_channel_for_duplicate", return_value=None)
+    @patch("main.build_upload_title", return_value="Test Title")
+    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    def test_instagram_crash_doesnt_affect_youtube(self, mock_dl, mock_crop, mock_title,
+                                                     mock_dedup, mock_upload, mock_clean,
+                                                     mock_ig_upload,
+                                                     clip, yt_service, conn, cfg, streamer, log):
+        cfg.instagram_enabled = True
+        result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
+        assert result == "uploaded"
+        assert yt_id == "yt_abc123"
+
+    @patch("main.upload_reel")
+    @patch("main._cleanup_tmp_files")
+    @patch("main.upload_short", return_value="yt_abc123")
+    @patch("main.check_channel_for_duplicate", return_value=None)
+    @patch("main.build_upload_title", return_value="Test Title")
+    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    def test_instagram_skipped_when_no_credentials(self, mock_dl, mock_crop, mock_title,
+                                                     mock_dedup, mock_upload, mock_clean,
+                                                     mock_ig_upload,
+                                                     clip, yt_service, conn, cfg, streamer, log):
+        cfg.instagram_enabled = True
+        result, _yt_id = _process_single_clip(
+            clip, yt_service, conn, cfg, streamer, log, False,
+            title_template=None, title_templates=None,
+            description_template=None, description_templates=None,
+            extra_tags_global=[],
+            thumbnail_enabled=False, thumbnail_samples=8, thumbnail_width=1280,
+            ig_credentials=None,  # No credentials
+        )
+        assert result == "uploaded"
+        mock_ig_upload.assert_not_called()
+
+    @patch("main.upload_reel")
+    @patch("main._cleanup_tmp_files")
+    @patch("main.upload_short", return_value="yt_abc123")
+    @patch("main.check_channel_for_duplicate", return_value=None)
+    @patch("main.build_upload_title", return_value="Test Title")
+    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    def test_instagram_skipped_when_disabled(self, mock_dl, mock_crop, mock_title,
+                                               mock_dedup, mock_upload, mock_clean,
+                                               mock_ig_upload,
+                                               clip, yt_service, conn, cfg, streamer, log):
+        cfg.instagram_enabled = False
+        result, _yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
+        assert result == "uploaded"
+        mock_ig_upload.assert_not_called()
+
+
 # ---- _process_streamer tests ----
 
 class TestProcessStreamer:
@@ -259,7 +396,7 @@ class TestProcessStreamer:
             streamer, twitch, cfg, conn, log, False,
             "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
         )
-        _fetched, _filtered, _downloaded, _processed, uploaded, _failed, _quota_exhausted = result
+        _fetched, _filtered, _downloaded, _processed, uploaded, _failed, _quota_exhausted, _skip_reason = result
         assert uploaded == 0  # No uploads due to spacing
 
     @patch("main._sync_streamer_metrics", return_value=2)
@@ -272,7 +409,7 @@ class TestProcessStreamer:
             streamer, twitch, cfg, conn, log, False,
             "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
         )
-        _fetched, _filtered, _downloaded, _processed, uploaded, _failed, quota = result
+        _fetched, _filtered, _downloaded, _processed, uploaded, _failed, quota, _skip_reason = result
         assert uploaded == 0
         assert quota is False
         mock_sync.assert_called_once()
@@ -298,7 +435,7 @@ class TestProcessStreamer:
             streamer, twitch, cfg, conn, log, False,
             "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
         )
-        _fetched, _filtered, _downloaded, _processed, uploaded, _failed, quota = result
+        _fetched, _filtered, _downloaded, _processed, uploaded, _failed, quota, _skip_reason = result
         assert uploaded == 0
         assert quota is False
         mock_sync.assert_called_once()
@@ -340,7 +477,7 @@ class TestProcessStreamer:
             streamer, twitch, cfg, conn, log, False,
             "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
         )
-        _, _, _, _, uploaded, failed, _ = result
+        _, _, _, _, uploaded, failed, _, _ = result
         assert failed == 3
         assert uploaded == 0
         # Only 3 calls to _process_single_clip (4th and 5th skipped)
@@ -379,7 +516,7 @@ class TestProcessStreamer:
             streamer, twitch, cfg, conn, log, False,
             "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
         )
-        _, _, _, _, uploaded, _, quota_exhausted = result
+        _, _, _, _, uploaded, _, quota_exhausted, _ = result
         assert quota_exhausted is True
         assert uploaded == 1
         assert mock_process.call_count == 2
@@ -418,7 +555,7 @@ class TestProcessStreamer:
             streamer, twitch, cfg, conn, log, False,
             "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
         )
-        _, _, downloaded, processed, uploaded, failed, _ = result
+        _, _, downloaded, processed, uploaded, failed, _, _ = result
         assert mock_process.call_count == 1  # Only 1 clip attempted
         assert downloaded == 1
         assert processed == 1
@@ -448,7 +585,7 @@ class TestProcessStreamer:
             streamer, twitch, cfg, conn, log, True,
             None, None, None, None, None, [], False, 8, 1280,
         )
-        _, _, _, _, uploaded, _, _ = result
+        _, _, _, _, uploaded, _, _, _ = result
         assert uploaded == 1
 
     @patch("main.update_streamer_stats")
@@ -473,7 +610,7 @@ class TestProcessStreamer:
             streamer, twitch, cfg, conn, log, False,
             "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
         )
-        _fetched, _filtered, _downloaded, _processed, uploaded, _failed, _ = result
+        _fetched, _filtered, _downloaded, _processed, uploaded, _failed, _, _ = result
         assert uploaded == 0
         # get_game_names should NOT have been called since uploads_remaining == 0
         twitch.get_game_names.assert_not_called()
@@ -514,6 +651,50 @@ class TestProcessStreamer:
         assert mock_process.call_count == 2
 
     @patch("main.update_streamer_stats")
+    @patch("main._process_single_clip")
+    @patch("main.get_authenticated_service", return_value=MagicMock())
+    @patch("main.recent_upload_count", return_value=0)
+    @patch("main.filter_new_clips")
+    @patch("main.filter_and_rank")
+    def test_instagram_rate_limit_disables_remaining_ig_uploads(self, mock_rank, mock_dedup, mock_recent,
+                                                                 mock_auth, mock_process, mock_stats,
+                                                                 conn, cfg, streamer, log):
+        cfg.max_clips_per_streamer = 2
+        cfg.max_uploads_per_window = 2
+        cfg.instagram_enabled = True
+        streamer.instagram_credentials = "creds/ig.json"
+        clips = [
+            Clip(id="c1", url="u", title="T1", view_count=100,
+                 created_at="2026-01-15T12:00:00Z", duration=30, streamer="teststreamer"),
+            Clip(id="c2", url="u", title="T2", view_count=100,
+                 created_at="2026-01-15T12:01:00Z", duration=30, streamer="teststreamer"),
+        ]
+        twitch = MagicMock()
+        twitch.fetch_clips.return_value = clips
+        twitch.get_game_names.return_value = {}
+        mock_rank.return_value = clips
+        mock_dedup.return_value = clips
+
+        ig_credentials_history: list[str | None] = []
+
+        def side_effect(*args, **kwargs):
+            ig_credentials_history.append(kwargs.get("ig_credentials"))
+            state = kwargs.get("ig_rate_limited_state")
+            if isinstance(state, list) and state and len(ig_credentials_history) == 1:
+                state[0] = True
+            return ("uploaded", "yt_x")
+
+        mock_process.side_effect = side_effect
+
+        result = _process_streamer(
+            streamer, twitch, cfg, conn, log, False,
+            "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
+        )
+        _, _, _, _, uploaded, _, _, _ = result
+        assert uploaded == 2
+        assert ig_credentials_history == ["creds/ig.json", None]
+
+    @patch("main.update_streamer_stats")
     def test_fetch_failure_returns_zeros(self, mock_stats, conn, cfg, streamer, log):
         twitch = MagicMock()
         twitch.fetch_clips.side_effect = Exception("network error")
@@ -522,10 +703,74 @@ class TestProcessStreamer:
             streamer, twitch, cfg, conn, log, False,
             "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
         )
-        fetched, _filtered, _downloaded, _processed, uploaded, _failed, quota = result
+        fetched, _filtered, _downloaded, _processed, uploaded, _failed, quota, _skip_reason = result
         assert fetched == 0
         assert uploaded == 0
         assert quota is False
+
+    @patch("main.update_streamer_stats")
+    @patch("main.recent_upload_count", return_value=1)
+    @patch("main.filter_new_clips")
+    @patch("main.filter_and_rank")
+    def test_skip_reason_spacing_limited(self, mock_rank, mock_dedup, mock_recent,
+                                         mock_stats, conn, cfg, streamer, log):
+        cfg.max_uploads_per_window = 1
+        clips = [
+            Clip(id="c1", url="u", title="T", view_count=100,
+                 created_at="2026-01-15T12:00:00Z", duration=30, streamer="teststreamer"),
+        ]
+        twitch = MagicMock()
+        twitch.fetch_clips.return_value = clips
+        mock_rank.return_value = clips
+        mock_dedup.return_value = clips
+
+        result = _process_streamer(
+            streamer, twitch, cfg, conn, log, False,
+            "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
+        )
+        _, _, _, _, uploaded, _, _, skip_reason = result
+        assert uploaded == 0
+        assert skip_reason == "spacing_limited"
+
+    @patch("main.update_streamer_stats")
+    def test_skip_reason_no_clips(self, mock_stats, conn, cfg, streamer, log):
+        twitch = MagicMock()
+        twitch.fetch_clips.return_value = []
+
+        result = _process_streamer(
+            streamer, twitch, cfg, conn, log, False,
+            "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
+        )
+        _, _, _, _, uploaded, _, _, skip_reason = result
+        assert uploaded == 0
+        assert skip_reason == "no_clips"
+
+    @patch("main.update_streamer_stats")
+    @patch("main._process_single_clip", return_value=("uploaded", "yt_1"))
+    @patch("main.get_authenticated_service", return_value=MagicMock())
+    @patch("main.recent_upload_count", return_value=0)
+    @patch("main.filter_new_clips")
+    @patch("main.filter_and_rank")
+    def test_skip_reason_none_on_success(self, mock_rank, mock_dedup, mock_recent,
+                                         mock_auth, mock_process, mock_stats,
+                                         conn, cfg, streamer, log):
+        clips = [
+            Clip(id="c1", url="u", title="T", view_count=100,
+                 created_at="2026-01-15T12:00:00Z", duration=30, streamer="teststreamer"),
+        ]
+        twitch = MagicMock()
+        twitch.fetch_clips.return_value = clips
+        twitch.get_game_names.return_value = {}
+        mock_rank.return_value = clips
+        mock_dedup.return_value = clips
+
+        result = _process_streamer(
+            streamer, twitch, cfg, conn, log, False,
+            "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
+        )
+        _, _, _, _, uploaded, _, _, skip_reason = result
+        assert uploaded == 1
+        assert skip_reason is None
 
 
 # ---- _run_pipeline_inner tests ----
@@ -538,7 +783,7 @@ class TestRunPipelineInner:
         streamer = StreamerConfig(name="test", twitch_id="123", youtube_credentials="creds/t.json")
         raw_config = {"youtube": {"client_secrets_file": "creds/secrets.json"}}
 
-        mock_process.return_value = (10, 3, 2, 2, 1, 0, False)
+        mock_process.return_value = (10, 3, 2, 2, 1, 0, False, None)
 
         log = MagicMock()
         _run_pipeline_inner(cfg, [streamer], raw_config, conn, log)
@@ -560,8 +805,8 @@ class TestRunPipelineInner:
 
         # First streamer hits quota, second should be skipped
         mock_process.side_effect = [
-            (5, 2, 1, 1, 0, 0, True),
-            (5, 2, 1, 1, 1, 0, False),  # Should not be reached
+            (5, 2, 1, 1, 0, 0, True, None),
+            (5, 2, 1, 1, 1, 0, False, None),  # Should not be reached
         ]
 
         log = MagicMock()
@@ -578,10 +823,61 @@ class TestRunPipelineInner:
 
     @patch.dict("os.environ", {"TWITCH_CLIENT_ID": "id", "TWITCH_CLIENT_SECRET": "secret"})
     def test_missing_client_secrets_file_raises(self, conn, cfg):
-        raw_config = {"youtube": {}}
+        raw_config: dict[str, dict[str, str]] = {"youtube": {}}
         log = MagicMock()
         with pytest.raises(ValueError, match="client_secrets_file"):
             _run_pipeline_inner(cfg, [], raw_config, conn, log)
+
+
+class TestWriteGithubSummary:
+    def test_noop_without_env_var(self, conn, tmp_path, monkeypatch):
+        monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+        summary_path = tmp_path / "summary.md"
+        run_result = {
+            "totals": {"fetched": 1, "filtered": 1, "downloaded": 1, "processed": 1, "uploaded": 1, "failed": 0},
+            "streamer_results": [{"streamer": "s", "uploaded": 1, "failed": 0, "skip_reason": None}],
+        }
+
+        write_github_summary(run_result, conn)
+        assert not summary_path.exists()
+
+    def test_writes_markdown_when_env_set(self, conn, tmp_path, monkeypatch):
+        summary_path = tmp_path / "summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+
+        now = datetime.now(UTC)
+        run1_started = (now - timedelta(minutes=10)).isoformat()
+        run2_started = (now - timedelta(minutes=5)).isoformat()
+        run1_id = insert_pipeline_run(conn, run1_started, trigger="cron")
+        run2_id = insert_pipeline_run(conn, run2_started, trigger="workflow_dispatch")
+        finish_pipeline_run(
+            conn,
+            run1_id,
+            run1_started,
+            {"fetched": 5, "filtered": 2, "downloaded": 2, "processed": 2, "uploaded": 2, "failed": 1},
+            [{"streamer": "alpha", "uploaded": 2, "failed": 1, "skip_reason": None}],
+        )
+        finish_pipeline_run(
+            conn,
+            run2_id,
+            run2_started,
+            {"fetched": 4, "filtered": 1, "downloaded": 1, "processed": 1, "uploaded": 1, "failed": 0},
+            [{"streamer": "beta", "uploaded": 1, "failed": 0, "skip_reason": "no_new_clips"}],
+        )
+
+        run_result = {
+            "totals": {"fetched": 5, "filtered": 2, "downloaded": 2, "processed": 2, "uploaded": 2, "failed": 1},
+            "streamer_results": [{"streamer": "alpha", "uploaded": 2, "failed": 1, "skip_reason": None}],
+        }
+        write_github_summary(run_result, conn)
+
+        content = summary_path.read_text(encoding="utf-8")
+        assert "## Pipeline Run Summary" in content
+        assert "| Uploaded | 2 | 3 |" in content
+        assert "| Failed | 1 | 1 |" in content
+        assert "### Per-Streamer Detail" in content
+        assert "| alpha | 2 | 1 | - |" in content
+        assert "### Today's Runs" in content
 
 
 # ---- validate_config tests ----
@@ -607,7 +903,7 @@ class TestValidateConfig:
     @patch.dict("os.environ", {"TWITCH_CLIENT_ID": "id", "TWITCH_CLIENT_SECRET": "secret"})
     def test_dry_run_skips_youtube_validation(self):
         streamers = [StreamerConfig(name="s", twitch_id="1", youtube_credentials="")]
-        raw = {"youtube": {}}
+        raw: dict[str, dict[str, str]] = {"youtube": {}}
         # Should not raise in dry run mode
         validate_config(streamers, raw, dry_run=True)
 

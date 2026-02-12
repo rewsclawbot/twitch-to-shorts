@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 60
     permissions:
       actions: write
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -57,6 +57,13 @@ jobs:
           printf '%s' "$YOUTUBE_CLIENT_SECRETS" | base64 -d > credentials/client_secret.json
           printf '%s' "$YOUTUBE_TOKEN_THEBURNTPEANUT" | base64 -d > credentials/theburntpeanut_youtube.json
 
+      - name: Restore Instagram credentials
+        if: ${{ env.INSTAGRAM_TOKEN_THEBURNTPEANUT != '' }}
+        env:
+          INSTAGRAM_TOKEN_THEBURNTPEANUT: ${{ secrets.INSTAGRAM_TOKEN_THEBURNTPEANUT }}
+        run: |
+          printf '%s' "$INSTAGRAM_TOKEN_THEBURNTPEANUT" | base64 -d > credentials/theburntpeanut_instagram.json
+
       - name: Restore database
         id: db-cache
         uses: actions/cache/restore@v4
@@ -83,6 +90,8 @@ jobs:
           TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
           TWITCH_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
           DISABLE_GPU_ENCODE: "1"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PIPELINE_TRIGGER: ${{ github.event_name == 'schedule' && 'cron' || 'workflow_dispatch' }}
         run: python main.py
 
       - name: Save updated token
@@ -94,6 +103,17 @@ jobs:
             base64 -w0 credentials/theburntpeanut_youtube.json | gh secret set YOUTUBE_TOKEN_THEBURNTPEANUT
           else
             echo "::warning::Token file missing or empty — skipping secret save to prevent corruption"
+          fi
+
+      - name: Save updated Instagram token
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          if [ -s credentials/theburntpeanut_instagram.json ]; then
+            base64 -w0 credentials/theburntpeanut_instagram.json | gh secret set INSTAGRAM_TOKEN_THEBURNTPEANUT
+          else
+            echo "::warning::Instagram token file missing or empty — skipping secret save"
           fi
 
       - name: Checkpoint WAL before cache save

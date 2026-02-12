@@ -46,8 +46,23 @@ def init_schema(conn: sqlite3.Connection):
             last_updated TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS pipeline_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            trigger TEXT,
+            total_fetched INTEGER DEFAULT 0,
+            total_filtered INTEGER DEFAULT 0,
+            total_downloaded INTEGER DEFAULT 0,
+            total_processed INTEGER DEFAULT 0,
+            total_uploaded INTEGER DEFAULT 0,
+            total_failed INTEGER DEFAULT 0,
+            streamer_details TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_clips_streamer ON clips(streamer);
         CREATE INDEX IF NOT EXISTS idx_clips_posted ON clips(posted_at);
+        CREATE INDEX IF NOT EXISTS idx_runs_started ON pipeline_runs(started_at);
     """)
     # Migration: add columns if missing (existing cached DBs may lack them)
     cols = {row[1] for row in conn.execute("PRAGMA table_info(clips)").fetchall()}
@@ -78,6 +93,8 @@ def init_schema(conn: sqlite3.Connection):
     if "vod_offset" not in cols:
         conn.execute("ALTER TABLE clips ADD COLUMN vod_offset INTEGER")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_clips_vod ON clips(vod_id, vod_offset)")
+    if "instagram_id" not in cols:
+        conn.execute("ALTER TABLE clips ADD COLUMN instagram_id TEXT")
 
 
 def clip_overlaps(conn: sqlite3.Connection, streamer: str, created_at: str, window_seconds: int = 30, exclude_clip_id: str | None = None) -> bool:
@@ -155,10 +172,57 @@ def recent_upload_count(
     return row["cnt"] if row else 0
 
 
+def insert_pipeline_run(conn: sqlite3.Connection, started_at: str, trigger: str = "local") -> int:
+    """Insert a new pipeline run row and return its id."""
+    cur = conn.execute(
+        "INSERT INTO pipeline_runs (started_at, trigger) VALUES (?, ?)",
+        (started_at, trigger),
+    )
+    conn.commit()
+    row_id = cur.lastrowid
+    if row_id is None:
+        raise RuntimeError("Failed to insert pipeline run row")
+    return int(row_id)
+
+
+def finish_pipeline_run(conn: sqlite3.Connection, run_id: int, finished_at: str, totals: dict, streamer_details: list[dict]):
+    """Update a pipeline run with final totals and per-streamer details."""
+    import json
+
+    conn.execute(
+        """UPDATE pipeline_runs
+           SET finished_at=?, total_fetched=?, total_filtered=?,
+               total_downloaded=?, total_processed=?,
+               total_uploaded=?, total_failed=?, streamer_details=?
+           WHERE id=?""",
+        (
+            finished_at,
+            totals.get("fetched", 0),
+            totals.get("filtered", 0),
+            totals.get("downloaded", 0),
+            totals.get("processed", 0),
+            totals.get("uploaded", 0),
+            totals.get("failed", 0),
+            json.dumps(streamer_details),
+            run_id,
+        ),
+    )
+    conn.commit()
+
+
+def get_todays_runs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Return all pipeline runs that started today (UTC)."""
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
+    return conn.execute(
+        "SELECT * FROM pipeline_runs WHERE started_at >= ? ORDER BY started_at",
+        (today + "T00:00:00",),
+    ).fetchall()
+
+
 def insert_clip(conn: sqlite3.Connection, clip: Clip):
     conn.execute(
-        """INSERT INTO clips (clip_id, streamer, channel_key, title, view_count, created_at, posted_at, youtube_id, duration, vod_id, vod_offset)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """INSERT INTO clips (clip_id, streamer, channel_key, title, view_count, created_at, posted_at, youtube_id, duration, vod_id, vod_offset, instagram_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(clip_id) DO UPDATE SET
                youtube_id = excluded.youtube_id,
                posted_at = excluded.posted_at,
@@ -167,10 +231,12 @@ def insert_clip(conn: sqlite3.Connection, clip: Clip):
                channel_key = excluded.channel_key,
                duration = COALESCE(excluded.duration, clips.duration),
                vod_id = COALESCE(excluded.vod_id, clips.vod_id),
-               vod_offset = COALESCE(excluded.vod_offset, clips.vod_offset)""",
+               vod_offset = COALESCE(excluded.vod_offset, clips.vod_offset),
+               instagram_id = COALESCE(excluded.instagram_id, clips.instagram_id)""",
         (clip.id, clip.streamer, clip.channel_key, clip.title, clip.view_count,
          clip.created_at, datetime.now(UTC).isoformat(), clip.youtube_id,
-         clip.duration, getattr(clip, 'vod_id', None), getattr(clip, 'vod_offset', None)),
+         clip.duration, getattr(clip, 'vod_id', None), getattr(clip, 'vod_offset', None),
+         getattr(clip, 'instagram_id', None)),
     )
     conn.commit()
 
@@ -178,8 +244,8 @@ def insert_clip(conn: sqlite3.Connection, clip: Clip):
 def record_known_clip(conn: sqlite3.Connection, clip: Clip):
     """Record a clip that's already on YouTube (duplicate). Does not set posted_at."""
     conn.execute(
-        """INSERT INTO clips (clip_id, streamer, channel_key, title, view_count, created_at, youtube_id, duration, vod_id, vod_offset)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """INSERT INTO clips (clip_id, streamer, channel_key, title, view_count, created_at, youtube_id, duration, vod_id, vod_offset, instagram_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(clip_id) DO UPDATE SET
                youtube_id = COALESCE(clips.youtube_id, excluded.youtube_id),
                view_count = excluded.view_count,
@@ -187,9 +253,11 @@ def record_known_clip(conn: sqlite3.Connection, clip: Clip):
                channel_key = excluded.channel_key,
                duration = COALESCE(excluded.duration, clips.duration),
                vod_id = COALESCE(excluded.vod_id, clips.vod_id),
-               vod_offset = COALESCE(excluded.vod_offset, clips.vod_offset)""",
+               vod_offset = COALESCE(excluded.vod_offset, clips.vod_offset),
+               instagram_id = COALESCE(excluded.instagram_id, clips.instagram_id)""",
         (clip.id, clip.streamer, clip.channel_key, clip.title, clip.view_count, clip.created_at, clip.youtube_id,
-         clip.duration, getattr(clip, 'vod_id', None), getattr(clip, 'vod_offset', None)),
+         clip.duration, getattr(clip, 'vod_id', None), getattr(clip, 'vod_offset', None),
+         getattr(clip, 'instagram_id', None)),
     )
     conn.commit()
 
@@ -339,3 +407,21 @@ def get_streamer_performance_multiplier(conn: sqlite3.Connection, streamer: str)
     multiplier = 0.5 + 0.5 * (avg_ctr / baseline_ctr)
     return max(0.5, min(2.0, multiplier))
 
+
+def update_instagram_id(conn: sqlite3.Connection, clip_id: str, instagram_id: str):
+    """Set the Instagram media ID for a clip after successful upload."""
+    conn.execute(
+        "UPDATE clips SET instagram_id = ? WHERE clip_id = ?",
+        (instagram_id, clip_id),
+    )
+    conn.commit()
+
+
+def recent_instagram_upload_count(conn: sqlite3.Connection, streamer: str, hours: int = 24) -> int:
+    """Count clips uploaded to Instagram within the last N hours."""
+    cutoff = (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
+    row = conn.execute(
+        "SELECT COUNT(*) as cnt FROM clips WHERE streamer = ? AND posted_at >= ? AND instagram_id IS NOT NULL",
+        (streamer, cutoff),
+    ).fetchone()
+    return row["cnt"] if row else 0

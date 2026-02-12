@@ -1,16 +1,22 @@
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from src.db import (
     clip_overlaps,
+    finish_pipeline_run,
     get_clips_for_metrics,
     get_streamer_performance_multiplier,
+    get_todays_runs,
     increment_fail_count,
     insert_clip,
+    insert_pipeline_run,
+    recent_instagram_upload_count,
     recent_upload_count,
     record_known_clip,
     touch_youtube_metrics_sync,
+    update_instagram_id,
     update_streamer_stats,
     update_youtube_metrics,
     update_youtube_reach_metrics,
@@ -139,6 +145,73 @@ class TestRecentUploadCount:
         insert_clip(conn, clip)
         count = recent_upload_count(conn, "teststreamer", hours=4)
         assert count == 0
+
+
+class TestPipelineRuns:
+    def test_insert_and_finish_roundtrip(self, conn):
+        started_at = datetime.now(UTC).isoformat()
+        run_id = insert_pipeline_run(conn, started_at, trigger="cron")
+        details = [{"streamer": "a", "uploaded": 1, "failed": 0, "skip_reason": None}]
+        totals = {
+            "fetched": 10,
+            "filtered": 3,
+            "downloaded": 2,
+            "processed": 2,
+            "uploaded": 1,
+            "failed": 0,
+        }
+        finished_at = datetime.now(UTC).isoformat()
+        finish_pipeline_run(conn, run_id, finished_at, totals, details)
+
+        row = conn.execute("SELECT * FROM pipeline_runs WHERE id = ?", (run_id,)).fetchone()
+        assert row is not None
+        assert row["started_at"] == started_at
+        assert row["finished_at"] == finished_at
+        assert row["trigger"] == "cron"
+        assert row["total_fetched"] == 10
+        assert row["total_filtered"] == 3
+        assert row["total_downloaded"] == 2
+        assert row["total_processed"] == 2
+        assert row["total_uploaded"] == 1
+        assert row["total_failed"] == 0
+        assert json.loads(row["streamer_details"]) == details
+
+    def test_get_todays_runs_filters_by_date(self, conn):
+        today_start = datetime.now(UTC).replace(hour=1, minute=0, second=0, microsecond=0).isoformat()
+        yesterday_start = (datetime.now(UTC) - timedelta(days=1)).replace(
+            hour=23, minute=0, second=0, microsecond=0
+        ).isoformat()
+        insert_pipeline_run(conn, today_start, trigger="cron")
+        insert_pipeline_run(conn, yesterday_start, trigger="cron")
+
+        rows = get_todays_runs(conn)
+        started = {row["started_at"] for row in rows}
+        assert today_start in started
+        assert yesterday_start not in started
+
+    def test_streamer_details_json_roundtrip(self, conn):
+        run_id = insert_pipeline_run(conn, datetime.now(UTC).isoformat())
+        details = [
+            {"streamer": "alpha", "uploaded": 0, "failed": 0, "skip_reason": "spacing_limited"},
+            {"streamer": "beta", "uploaded": 1, "failed": 0, "skip_reason": None},
+        ]
+        finish_pipeline_run(
+            conn,
+            run_id,
+            datetime.now(UTC).isoformat(),
+            {
+                "fetched": 5,
+                "filtered": 2,
+                "downloaded": 1,
+                "processed": 1,
+                "uploaded": 1,
+                "failed": 0,
+            },
+            details,
+        )
+        row = conn.execute("SELECT streamer_details FROM pipeline_runs WHERE id = ?", (run_id,)).fetchone()
+        assert row is not None
+        assert json.loads(row["streamer_details"]) == details
 
 
 class TestUpdateStreamerStats:
@@ -560,3 +633,61 @@ class TestVodOverlaps:
         assert row["vod_id"] == "vod_456"
         assert row["vod_offset"] == 200
         assert row["duration"] == 40
+
+
+class TestUpdateInstagramId:
+    def test_sets_instagram_id(self, conn):
+        clip = make_clip(clip_id="ig_1", youtube_id="yt_1")
+        insert_clip(conn, clip)
+        update_instagram_id(conn, "ig_1", "ig_media_123")
+        row = conn.execute("SELECT instagram_id FROM clips WHERE clip_id = 'ig_1'").fetchone()
+        assert row["instagram_id"] == "ig_media_123"
+
+    def test_does_not_affect_youtube_id(self, conn):
+        clip = make_clip(clip_id="ig_2", youtube_id="yt_2")
+        insert_clip(conn, clip)
+        update_instagram_id(conn, "ig_2", "ig_media_456")
+        row = conn.execute("SELECT youtube_id, instagram_id FROM clips WHERE clip_id = 'ig_2'").fetchone()
+        assert row["youtube_id"] == "yt_2"
+        assert row["instagram_id"] == "ig_media_456"
+
+
+class TestRecentInstagramUploadCount:
+    def test_counts_recent_instagram_uploads(self, conn):
+        clip = make_clip(clip_id="ig_cnt_1", youtube_id="yt_1", instagram_id="ig_1")
+        insert_clip(conn, clip)
+        count = recent_instagram_upload_count(conn, "teststreamer", hours=24)
+        assert count == 1
+
+    def test_excludes_clips_without_instagram_id(self, conn):
+        clip = make_clip(clip_id="ig_cnt_2", youtube_id="yt_1")
+        insert_clip(conn, clip)
+        count = recent_instagram_upload_count(conn, "teststreamer", hours=24)
+        assert count == 0
+
+    def test_excludes_old_uploads(self, conn):
+        old_time = (datetime.now(UTC) - timedelta(hours=48)).isoformat()
+        conn.execute(
+            "INSERT INTO clips (clip_id, streamer, posted_at, instagram_id) VALUES (?, ?, ?, ?)",
+            ("ig_old", "teststreamer", old_time, "ig_old_1"),
+        )
+        conn.commit()
+        count = recent_instagram_upload_count(conn, "teststreamer", hours=24)
+        assert count == 0
+
+
+class TestInsertClipWithInstagramId:
+    def test_insert_preserves_instagram_id(self, conn):
+        clip = make_clip(clip_id="ig_ins_1", youtube_id="yt_1", instagram_id="ig_1")
+        insert_clip(conn, clip)
+        row = conn.execute("SELECT instagram_id FROM clips WHERE clip_id = 'ig_ins_1'").fetchone()
+        assert row["instagram_id"] == "ig_1"
+
+    def test_coalesce_preserves_existing_instagram_id(self, conn):
+        """Re-inserting without instagram_id should NOT overwrite existing."""
+        clip1 = make_clip(clip_id="ig_ins_2", youtube_id="yt_1", instagram_id="ig_1")
+        insert_clip(conn, clip1)
+        clip2 = make_clip(clip_id="ig_ins_2", youtube_id="yt_2")  # no instagram_id
+        insert_clip(conn, clip2)
+        row = conn.execute("SELECT instagram_id FROM clips WHERE clip_id = 'ig_ins_2'").fetchone()
+        assert row["instagram_id"] == "ig_1"  # preserved

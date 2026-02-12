@@ -135,6 +135,7 @@ class TestFetchVideoMetrics:
         service.reports().query().execute.return_value = response
 
         result = fetch_video_metrics(service, "v1", "2026-01-01", "2026-01-31")
+        assert result is not None
         assert result["yt_impressions_ctr"] == pytest.approx(0.05)
 
 

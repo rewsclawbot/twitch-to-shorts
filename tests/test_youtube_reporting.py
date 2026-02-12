@@ -246,7 +246,7 @@ class TestFilterReports:
 
     def test_reports_with_missing_dates_excluded(self):
         """Report with no startTime/endTime is SKIPPED, not included."""
-        reports = [
+        reports: list[dict] = [
             {"startTime": None, "endTime": None},
             {},
             {"startTime": "2026-01-10T00:00:00Z"},  # missing endTime
