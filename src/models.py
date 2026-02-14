@@ -75,6 +75,8 @@ class PipelineConfig:
     analytics_min_age_hours: int = 48
     analytics_sync_interval_hours: int = 24
     analytics_max_videos_per_run: int = 20
+    force_upload: bool = False
+    posting_schedule: dict | None = None
 
     def __post_init__(self):
         errors: list[str] = []
@@ -118,6 +120,7 @@ class PipelineConfig:
 
         self.captions_enabled = bool(self.captions_enabled)
         self.instagram_enabled = bool(self.instagram_enabled)
+        self.force_upload = bool(self.force_upload)
 
         if self.age_decay not in ("linear", "log"):
             errors.append(f"age_decay must be 'linear' or 'log', got {self.age_decay!r}")

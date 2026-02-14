@@ -54,3 +54,17 @@ pipeline:
   analytics_sync_interval_hours: 24
   analytics_max_videos_per_run: 20
   captions_enabled: true
+  force_upload: false
+  posting_schedule:
+    enabled: true
+    timezone: America/Chicago  # CST/CDT
+    weekday_windows:
+      - start: '11:00'
+        end: '14:00'
+      - start: '18:00'
+        end: '20:00'
+    weekend_windows:
+      - start: '08:00'
+        end: '10:00'
+      - start: '16:00'
+        end: '18:00'

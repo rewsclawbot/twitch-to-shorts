@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from main import (
+    _is_within_posting_window,
     _process_single_clip,
     _process_streamer,
     _run_pipeline_inner,
@@ -1245,3 +1246,276 @@ class TestSyncStreamerMetrics:
 
         # Only yt_X was actually synced
         assert result == 1
+
+
+# ---- _is_within_posting_window tests ----
+
+class TestIsWithinPostingWindow:
+    """Tests for posting schedule time window checking."""
+
+    def test_force_upload_bypasses_schedule(self):
+        """force_upload=True should always return True."""
+        schedule = {
+            "enabled": True,
+            "timezone": "America/Chicago",
+            "weekday_windows": [],
+            "weekend_windows": [],
+        }
+        result = _is_within_posting_window(schedule, force_upload=True)
+        assert result is True
+
+    def test_disabled_schedule_returns_true(self):
+        """When schedule is disabled, should always return True."""
+        schedule = {
+            "enabled": False,
+            "timezone": "America/Chicago",
+            "weekday_windows": [],
+            "weekend_windows": [],
+        }
+        result = _is_within_posting_window(schedule, force_upload=False)
+        assert result is True
+
+    def test_none_schedule_returns_true(self):
+        """When schedule is None, should return True."""
+        result = _is_within_posting_window(None, force_upload=False)
+        assert result is True
+
+    @patch("main.datetime")
+    def test_weekday_within_window(self, mock_datetime):
+        """Weekday at 12:00 CST should be within 11:00-14:00 window."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        # Tuesday 12:00 CST
+        mock_now = datetime(2026, 2, 17, 12, 0, 0, tzinfo=ZoneInfo("America/Chicago"))
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        schedule = {
+            "enabled": True,
+            "timezone": "America/Chicago",
+            "weekday_windows": [
+                {"start": "11:00", "end": "14:00"},
+                {"start": "18:00", "end": "20:00"},
+            ],
+            "weekend_windows": [],
+        }
+        result = _is_within_posting_window(schedule, force_upload=False)
+        assert result is True
+
+    @patch("main.datetime")
+    def test_weekday_outside_window(self, mock_datetime):
+        """Weekday at 15:00 CST should be outside all windows."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        # Tuesday 15:00 CST
+        mock_now = datetime(2026, 2, 17, 15, 0, 0, tzinfo=ZoneInfo("America/Chicago"))
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        schedule = {
+            "enabled": True,
+            "timezone": "America/Chicago",
+            "weekday_windows": [
+                {"start": "11:00", "end": "14:00"},
+                {"start": "18:00", "end": "20:00"},
+            ],
+            "weekend_windows": [],
+        }
+        result = _is_within_posting_window(schedule, force_upload=False)
+        assert result is False
+
+    @patch("main.datetime")
+    def test_weekend_within_window(self, mock_datetime):
+        """Saturday 09:00 CST should be within 08:00-10:00 weekend window."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        # Saturday 09:00 CST
+        mock_now = datetime(2026, 2, 21, 9, 0, 0, tzinfo=ZoneInfo("America/Chicago"))
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        schedule = {
+            "enabled": True,
+            "timezone": "America/Chicago",
+            "weekday_windows": [],
+            "weekend_windows": [
+                {"start": "08:00", "end": "10:00"},
+                {"start": "16:00", "end": "18:00"},
+            ],
+        }
+        result = _is_within_posting_window(schedule, force_upload=False)
+        assert result is True
+
+    @patch("main.datetime")
+    def test_weekend_outside_window(self, mock_datetime):
+        """Sunday 14:00 CST should be outside all weekend windows."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        # Sunday 14:00 CST
+        mock_now = datetime(2026, 2, 22, 14, 0, 0, tzinfo=ZoneInfo("America/Chicago"))
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        schedule = {
+            "enabled": True,
+            "timezone": "America/Chicago",
+            "weekday_windows": [],
+            "weekend_windows": [
+                {"start": "08:00", "end": "10:00"},
+                {"start": "16:00", "end": "18:00"},
+            ],
+        }
+        result = _is_within_posting_window(schedule, force_upload=False)
+        assert result is False
+
+    @patch("main.datetime")
+    def test_boundary_start_time(self, mock_datetime):
+        """Exactly at window start time (11:00) should be within window."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        # Tuesday 11:00 CST exactly
+        mock_now = datetime(2026, 2, 17, 11, 0, 0, tzinfo=ZoneInfo("America/Chicago"))
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        schedule = {
+            "enabled": True,
+            "timezone": "America/Chicago",
+            "weekday_windows": [{"start": "11:00", "end": "14:00"}],
+            "weekend_windows": [],
+        }
+        result = _is_within_posting_window(schedule, force_upload=False)
+        assert result is True
+
+    @patch("main.datetime")
+    def test_boundary_end_time(self, mock_datetime):
+        """Exactly at window end time (14:00) should be within window."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        # Tuesday 14:00 CST exactly
+        mock_now = datetime(2026, 2, 17, 14, 0, 0, tzinfo=ZoneInfo("America/Chicago"))
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        schedule = {
+            "enabled": True,
+            "timezone": "America/Chicago",
+            "weekday_windows": [{"start": "11:00", "end": "14:00"}],
+            "weekend_windows": [],
+        }
+        result = _is_within_posting_window(schedule, force_upload=False)
+        assert result is True
+
+    @patch("main.datetime")
+    def test_invalid_timezone_defaults_to_chicago(self, mock_datetime):
+        """Invalid timezone should default to America/Chicago."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        mock_now = datetime(2026, 2, 17, 12, 0, 0, tzinfo=ZoneInfo("America/Chicago"))
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
+
+        schedule = {
+            "enabled": True,
+            "timezone": "Invalid/Timezone",
+            "weekday_windows": [{"start": "11:00", "end": "14:00"}],
+            "weekend_windows": [],
+        }
+        # Should not crash, should use default timezone
+        result = _is_within_posting_window(schedule, force_upload=False)
+        assert result is True
+
+
+class TestProcessStreamerPostingWindow:
+    """Integration tests for posting window in _process_streamer."""
+
+    @patch("main._is_within_posting_window", return_value=False)
+    @patch("main.update_streamer_stats")
+    @patch("main.recent_upload_count", return_value=0)
+    @patch("main.filter_new_clips")
+    @patch("main.filter_and_rank")
+    def test_outside_posting_window_skips_upload(self, mock_rank, mock_dedup, mock_recent,
+                                                  mock_stats, mock_window, conn, cfg, streamer, log):
+        """When outside posting window, uploads should be skipped."""
+        cfg.posting_schedule = {"enabled": True}
+        clips = [
+            Clip(id="c1", url="u", title="T", view_count=100,
+                 created_at="2026-01-15T12:00:00Z", duration=30, streamer="teststreamer"),
+        ]
+        twitch = MagicMock()
+        twitch.fetch_clips.return_value = clips
+        mock_rank.return_value = clips
+        mock_dedup.return_value = clips
+
+        result = _process_streamer(
+            streamer, twitch, cfg, conn, log, False,
+            "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
+        )
+        _, _, _, _, uploaded, _, _, skip_reason = result
+        assert uploaded == 0
+        assert skip_reason == "outside_posting_window"
+        mock_window.assert_called_once()
+
+    @patch("main._is_within_posting_window", return_value=True)
+    @patch("main.update_streamer_stats")
+    @patch("main._process_single_clip", return_value=("uploaded", "yt_1"))
+    @patch("main.get_authenticated_service", return_value=MagicMock())
+    @patch("main.recent_upload_count", return_value=0)
+    @patch("main.filter_new_clips")
+    @patch("main.filter_and_rank")
+    def test_within_posting_window_allows_upload(self, mock_rank, mock_dedup, mock_recent,
+                                                  mock_auth, mock_process, mock_stats,
+                                                  mock_window, conn, cfg, streamer, log):
+        """When within posting window, uploads should proceed."""
+        cfg.posting_schedule = {"enabled": True}
+        clips = [
+            Clip(id="c1", url="u", title="T", view_count=100,
+                 created_at="2026-01-15T12:00:00Z", duration=30, streamer="teststreamer"),
+        ]
+        twitch = MagicMock()
+        twitch.fetch_clips.return_value = clips
+        twitch.get_game_names.return_value = {}
+        mock_rank.return_value = clips
+        mock_dedup.return_value = clips
+
+        result = _process_streamer(
+            streamer, twitch, cfg, conn, log, False,
+            "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
+        )
+        _, _, _, _, uploaded, _, _, skip_reason = result
+        assert uploaded == 1
+        assert skip_reason is None
+        mock_window.assert_called_once()
+
+    @patch("main._is_within_posting_window", return_value=True)
+    @patch("main.update_streamer_stats")
+    @patch("main._process_single_clip", return_value=("uploaded", "yt_1"))
+    @patch("main.get_authenticated_service", return_value=MagicMock())
+    @patch("main.recent_upload_count", return_value=0)
+    @patch("main.filter_new_clips")
+    @patch("main.filter_and_rank")
+    def test_force_upload_bypasses_window(self, mock_rank, mock_dedup, mock_recent,
+                                          mock_auth, mock_process, mock_stats,
+                                          mock_window, conn, cfg, streamer, log):
+        """force_upload=True should bypass posting window check."""
+        cfg.posting_schedule = {"enabled": True}
+        cfg.force_upload = True
+        clips = [
+            Clip(id="c1", url="u", title="T", view_count=100,
+                 created_at="2026-01-15T12:00:00Z", duration=30, streamer="teststreamer"),
+        ]
+        twitch = MagicMock()
+        twitch.fetch_clips.return_value = clips
+        twitch.get_game_names.return_value = {}
+        mock_rank.return_value = clips
+        mock_dedup.return_value = clips
+
+        result = _process_streamer(
+            streamer, twitch, cfg, conn, log, False,
+            "creds/secrets.json", None, None, None, None, [], False, 8, 1280,
+        )
+        _, _, _, _, uploaded, _, _, skip_reason = result
+        assert uploaded == 1
+        # _is_within_posting_window should have been called with force_upload=True
+        _, kwargs = mock_window.call_args
+        assert kwargs.get("force_upload") is True or mock_window.call_args[0][1] is True

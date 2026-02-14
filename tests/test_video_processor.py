@@ -14,6 +14,7 @@ from src.video_processor import (
     _run_ffmpeg,
     crop_to_vertical,
     detect_leading_silence,
+    detect_visual_dead_frames,
     extract_thumbnail,
 )
 
@@ -547,3 +548,126 @@ class TestLoudnessValidation:
         af_value = cmd[af_idx + 1]
         assert "measured_I=-18.2" in af_value
         assert "linear=true" in af_value
+
+
+class TestDetectVisualDeadFrames:
+    """Tests for visual dead frame detection (static/loading screens)."""
+
+    @patch("src.video_processor._batch_sample_ydif")
+    def test_no_dead_frames_motion_detected_immediately(self, mock_batch):
+        """First sample has motion (YDIF >= 0.5), returns 0.0 trim."""
+        mock_batch.return_value = [1.5, 2.0, 3.0, 2.5]  # All have motion
+        result = detect_visual_dead_frames("test.mp4", start_offset=0.0)
+        assert result == 0.0
+
+    @patch("src.video_processor._batch_sample_ydif")
+    def test_dead_frames_detected(self, mock_batch):
+        """First 3 samples static (YDIF < 0.5), motion at 4th sample (1.5s)."""
+        mock_batch.return_value = [0.2, 0.3, 0.1, 1.5, 2.0, 3.0]
+        result = detect_visual_dead_frames("test.mp4", start_offset=0.0)
+        # 3 samples * 0.5s = 1.5s trim
+        assert result == 1.5
+
+    @patch("src.video_processor._batch_sample_ydif")
+    def test_all_frames_static_returns_max_trim(self, mock_batch):
+        """All samples are static, returns max_trim (3.0s default)."""
+        mock_batch.return_value = [0.1, 0.2, 0.15, 0.25, 0.3, 0.4]  # All < 0.5
+        result = detect_visual_dead_frames("test.mp4", start_offset=0.0)
+        assert result == 3.0
+
+    @patch("src.video_processor._batch_sample_ydif")
+    def test_custom_max_trim(self, mock_batch):
+        """Custom max_trim is respected when all frames are static."""
+        mock_batch.return_value = [0.1, 0.2, 0.15]  # All static
+        result = detect_visual_dead_frames("test.mp4", start_offset=0.0, max_trim=1.5)
+        assert result == 1.5
+
+    @patch("src.video_processor._batch_sample_ydif")
+    def test_custom_ydif_threshold(self, mock_batch):
+        """Custom YDIF threshold affects what's considered static."""
+        mock_batch.return_value = [0.6, 0.7, 1.5]
+        # Default threshold=0.5: first two have motion
+        result1 = detect_visual_dead_frames("test.mp4", start_offset=0.0, ydif_threshold=0.5)
+        assert result1 == 0.0
+        # Threshold=1.0: first two are now static
+        result2 = detect_visual_dead_frames("test.mp4", start_offset=0.0, ydif_threshold=1.0)
+        assert result2 == 1.0
+
+    @patch("src.video_processor._batch_sample_ydif")
+    def test_start_offset_applied(self, mock_batch):
+        """start_offset is passed to sampling timestamps."""
+        mock_batch.return_value = [1.5]
+        detect_visual_dead_frames("test.mp4", start_offset=2.0)
+        # Verify _batch_sample_ydif was called with timestamps starting at 2.0
+        timestamps = mock_batch.call_args[0][1]
+        assert timestamps[0] == 2.0
+
+    @patch("src.video_processor._batch_sample_ydif")
+    def test_samples_at_half_second_intervals(self, mock_batch):
+        """Samples are taken at 0.5s intervals."""
+        mock_batch.return_value = [0.1, 0.2, 1.5]
+        detect_visual_dead_frames("test.mp4", start_offset=0.0)
+        timestamps = mock_batch.call_args[0][1]
+        # Should sample at 0.0, 0.5, 1.0, 1.5, 2.0, 2.5 (6 samples for 3s max_trim)
+        assert len(timestamps) == 6
+        assert timestamps[0] == 0.0
+        assert timestamps[1] == 0.5
+        assert timestamps[2] == 1.0
+
+    @patch("src.video_processor._batch_sample_ydif")
+    def test_exception_returns_zero(self, mock_batch):
+        """If _batch_sample_ydif raises exception, returns 0.0."""
+        mock_batch.side_effect = Exception("ffmpeg crash")
+        result = detect_visual_dead_frames("test.mp4")
+        assert result == 0.0
+
+    @patch("src.video_processor._batch_sample_ydif")
+    def test_boundary_value_exact_threshold(self, mock_batch):
+        """YDIF exactly at threshold (0.5) is considered motion."""
+        mock_batch.return_value = [0.5, 1.0]
+        result = detect_visual_dead_frames("test.mp4", start_offset=0.0)
+        # 0.5 >= 0.5, so motion detected immediately
+        assert result == 0.0
+
+
+class TestCropToVerticalVisualDeadFrames:
+    """Integration test: crop_to_vertical should call detect_visual_dead_frames."""
+
+    @patch("src.video_processor.detect_visual_dead_frames", return_value=1.5)
+    @patch("src.video_processor._run_ffmpeg")
+    @patch("src.video_processor._measure_loudness", return_value=None)
+    @patch("src.video_processor.detect_leading_silence", return_value=2.0)
+    @patch("src.video_processor._probe_video_info", return_value=(30.0, (1920, 1080)))
+    @patch("src.video_processor.os.path.exists", return_value=False)
+    def test_visual_trim_added_to_audio_trim(self, mock_exists, mock_probe, mock_silence,
+                                              mock_loudness, mock_ffmpeg, mock_visual):
+        """crop_to_vertical adds visual_trim to silence_trim."""
+        mock_ffmpeg.return_value = True
+
+        with patch.dict("os.environ", {"DISABLE_GPU_ENCODE": "1"}):
+            crop_to_vertical("test.mp4", "/tmp/test", facecam_mode="off")
+
+        # detect_visual_dead_frames should be called with start_offset=2.0 (audio silence)
+        mock_visual.assert_called_once_with("test.mp4", start_offset=2.0)
+
+        # _run_ffmpeg should be called with ss=3.5 (2.0 audio + 1.5 visual)
+        _, kwargs = mock_ffmpeg.call_args
+        assert kwargs.get("ss") == 3.5
+
+    @patch("src.video_processor.detect_visual_dead_frames", return_value=0.0)
+    @patch("src.video_processor._run_ffmpeg")
+    @patch("src.video_processor._measure_loudness", return_value=None)
+    @patch("src.video_processor.detect_leading_silence", return_value=0.0)
+    @patch("src.video_processor._probe_video_info", return_value=(30.0, (1920, 1080)))
+    @patch("src.video_processor.os.path.exists", return_value=False)
+    def test_no_trim_when_no_dead_frames(self, mock_exists, mock_probe, mock_silence,
+                                         mock_loudness, mock_ffmpeg, mock_visual):
+        """No visual trim when detect_visual_dead_frames returns 0."""
+        mock_ffmpeg.return_value = True
+
+        with patch.dict("os.environ", {"DISABLE_GPU_ENCODE": "1"}):
+            crop_to_vertical("test.mp4", "/tmp/test", facecam_mode="off")
+
+        # _run_ffmpeg should be called with ss=0.0
+        _, kwargs = mock_ffmpeg.call_args
+        assert kwargs.get("ss") == 0.0

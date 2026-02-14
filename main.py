@@ -6,6 +6,7 @@ import os
 import sys
 import time
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import yaml
 from dotenv import load_dotenv
@@ -35,7 +36,7 @@ from src.instagram_uploader import (  # noqa: E402
 from src.models import FacecamConfig, PipelineConfig, StreamerConfig  # noqa: E402
 from src.title_optimizer import optimize_title  # noqa: E402
 from src.twitch_client import TwitchClient  # noqa: E402
-from src.video_processor import crop_to_vertical, detect_leading_silence, extract_thumbnail  # noqa: E402
+from src.video_processor import crop_to_vertical, detect_leading_silence, detect_visual_dead_frames, extract_thumbnail  # noqa: E402
 from src.youtube_analytics import fetch_video_metrics, get_analytics_service  # noqa: E402
 from src.youtube_reporting import fetch_reach_metrics, get_reporting_service  # noqa: E402
 from src.youtube_uploader import (  # noqa: E402
@@ -401,6 +402,57 @@ def run_pipeline(pipeline: PipelineConfig, streamers: list[StreamerConfig], raw_
         conn.close()
 
 
+def _is_within_posting_window(posting_schedule: dict | None, force_upload: bool = False) -> bool:
+    """Check if current time is within allowed posting windows.
+
+    Args:
+        posting_schedule: Dict with 'enabled', 'timezone', 'weekday_windows', 'weekend_windows'
+        force_upload: If True, bypass schedule check
+
+    Returns:
+        True if uploading is allowed, False otherwise
+    """
+    if force_upload or not posting_schedule or not posting_schedule.get("enabled"):
+        return True
+
+    try:
+        tz = ZoneInfo(posting_schedule.get("timezone", "America/Chicago"))
+    except Exception:
+        log.warning("Invalid timezone in posting_schedule, defaulting to America/Chicago")
+        tz = ZoneInfo("America/Chicago")
+
+    now = datetime.now(tz)
+    current_time = now.time()
+    is_weekend = now.weekday() >= 5  # Saturday=5, Sunday=6
+
+    windows = posting_schedule.get("weekend_windows" if is_weekend else "weekday_windows", [])
+
+    for window in windows:
+        try:
+            start_parts = window["start"].split(":")
+            end_parts = window["end"].split(":")
+            start_time = now.replace(
+                hour=int(start_parts[0]),
+                minute=int(start_parts[1]) if len(start_parts) > 1 else 0,
+                second=0,
+                microsecond=0
+            ).time()
+            end_time = now.replace(
+                hour=int(end_parts[0]),
+                minute=int(end_parts[1]) if len(end_parts) > 1 else 0,
+                second=0,
+                microsecond=0
+            ).time()
+
+            if start_time <= current_time <= end_time:
+                return True
+        except (KeyError, ValueError, IndexError) as e:
+            log.warning("Invalid posting window configuration: %s", e)
+            continue
+
+    return False
+
+
 def _process_single_clip(clip, yt_service, conn, cfg, streamer, log, dry_run,
                          title_template, title_templates, description_template,
                          description_templates, extra_tags_global,
@@ -647,6 +699,12 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
     if uploads_remaining == 0:
         log.info("Skipping uploads for %s: %d uploaded in last %dh", name, recent, cfg.upload_spacing_hours)
         skip_reason = "spacing_limited"
+        return _finalize_and_return(False)
+
+    # Check posting schedule window
+    if not _is_within_posting_window(cfg.posting_schedule, cfg.force_upload):
+        log.info("Skipping upload - outside posting window")
+        skip_reason = "outside_posting_window"
         return _finalize_and_return(False)
 
     game_ids = [c.game_id for c in new_clips]

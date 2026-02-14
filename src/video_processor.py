@@ -167,6 +167,47 @@ def detect_leading_silence(input_path: str, threshold_db: float = -30, min_durat
     return 0.0
 
 
+def detect_visual_dead_frames(input_path: str, start_offset: float = 0.0, ydif_threshold: float = 0.5, max_trim: float = 3.0) -> float:
+    """Detect and return duration of visual dead frames (static/loading screens) at the start.
+
+    Samples YDIF at 0.5s intervals from start_offset. Returns the number of seconds
+    to trim when YDIF < threshold (indicating static content). Capped at max_trim.
+
+    Args:
+        input_path: Path to video file
+        start_offset: Starting point in seconds (e.g., after audio silence trim)
+        ydif_threshold: YDIF threshold below which frames are considered static (default 0.5)
+        max_trim: Maximum seconds to trim to avoid cutting real content (default 3.0s)
+
+    Returns:
+        Duration in seconds to trim (0.0 if no dead frames detected)
+    """
+    sample_interval = 0.5
+    max_samples = int(max_trim / sample_interval)
+
+    # Sample at 0.5s intervals from start_offset
+    timestamps = [start_offset + (i * sample_interval) for i in range(max_samples)]
+
+    try:
+        scores = _batch_sample_ydif(input_path, timestamps)
+
+        # Find first frame with motion (YDIF >= threshold)
+        for i, score in enumerate(scores):
+            if score >= ydif_threshold:
+                trim_duration = i * sample_interval
+                if trim_duration > 0:
+                    log.info("Detected %.2fs of visual dead frames (YDIF < %.1f)", trim_duration, ydif_threshold)
+                return trim_duration
+
+        # All samples are static - return max_trim
+        log.info("All sampled frames are static (YDIF < %.1f), trimming %.2fs", ydif_threshold, max_trim)
+        return max_trim
+
+    except Exception as e:
+        log.warning("Visual dead frame detection failed: %s", e)
+        return 0.0
+
+
 def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
                      facecam: FacecamConfig | None = None,
                      facecam_mode: str = "auto",
@@ -198,6 +239,12 @@ def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
     trim_start = silence_offset if silence_offset is not None else detect_leading_silence(input_path)
     if trim_start > 0:
         log.info("Trimming %.2fs leading silence from %s", trim_start, clip_id)
+
+    # After audio silence trim, check for visual dead frames (static/loading screens)
+    visual_trim = detect_visual_dead_frames(input_path, start_offset=trim_start)
+    if visual_trim > 0:
+        log.info("Trimming additional %.2fs visual dead frames from %s", visual_trim, clip_id)
+        trim_start += visual_trim
 
     mode = (facecam_mode or "auto").lower()
     if mode not in ("auto", "always", "off"):
