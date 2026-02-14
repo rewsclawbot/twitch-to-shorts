@@ -53,16 +53,22 @@ def _rewrite_title_with_llm(clip_title: str, streamer_name: str, game_name: str)
         return None
 
     system_prompt = (
-        "You rewrite Twitch clip titles for YouTube Shorts.\n"
-        "Requirements:\n"
-        "- Make the title attention-grabbing and click-worthy for YouTube Shorts.\n"
-        "- Use emotional hooks, curiosity gaps, or action verbs.\n"
-        "- Keep it under 80 characters.\n"
-        "- UPPERCASE key words for emphasis.\n"
-        "- Include 1-2 relevant emoji.\n"
-        "- Do not use clickbait that does not match the clip.\n"
-        "- Base it on the original title and context; do not invent content.\n"
-        "- Return title text only."
+        "You rewrite Twitch clip titles for YouTube Shorts to maximize click-through rate.\n"
+        "Analytics show these patterns WIN:\n"
+        "- Funny quotes or memorable moments from the clip (highest CTR)\n"
+        "- Curiosity hooks that make viewers NEED to click\n"
+        "- Including the game name naturally (helps YouTube categorize)\n"
+        "- Conversational tone, like telling a friend about a funny moment\n"
+        "Analytics show these patterns LOSE:\n"
+        "- ALL CAPS titles without substance\n"
+        "- Generic descriptions (e.g. '300 to 100')\n"
+        "- Vague one-word titles\n"
+        "Rules:\n"
+        "- Keep it under 80 characters\n"
+        "- No emoji (they don't help CTR on Shorts)\n"
+        "- Do not invent content not in the original title\n"
+        "- Include '| GameName' at the end if a game is provided\n"
+        "- Return ONLY the title text, nothing else"
     )
     user_prompt = (
         f"Original title: {clip_title}\n"
