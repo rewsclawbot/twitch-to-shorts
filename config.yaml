@@ -54,6 +54,8 @@ pipeline:
   analytics_sync_interval_hours: 24
   analytics_max_videos_per_run: 20
   captions_enabled: true
+  peak_action_trim: true
+  loop_optimize: true
   force_upload: false
   posting_schedule:
     enabled: true

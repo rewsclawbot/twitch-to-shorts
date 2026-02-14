@@ -349,11 +349,18 @@ def _apply_loop_crossfade(video_path: str, crossfade_duration: float = 0.3) -> b
         return False
 
 
+def apply_loop_crossfade(video_path: str, crossfade_duration: float = 0.3) -> bool:
+    """Public wrapper for applying a short end->start crossfade."""
+    return _apply_loop_crossfade(video_path, crossfade_duration=crossfade_duration)
+
+
 def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
                      facecam: FacecamConfig | None = None,
                      facecam_mode: str = "auto",
                      subtitle_path: str | None = None,
-                     silence_offset: float | None = None) -> str | None:
+                     silence_offset: float | None = None,
+                     peak_action_trim: bool = True,
+                     loop_optimize: bool = True) -> str | None:
     """Crop a 16:9 video to 9:16 vertical (1080x1920) with facecam+gameplay layout.
 
     If facecam config is provided, output is split: top 20% facecam, bottom 80% gameplay.
@@ -387,16 +394,17 @@ def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
         log.info("Trimming additional %.2fs visual dead frames from %s", visual_trim, clip_id)
         trim_start += visual_trim
 
-    peak_ts = find_peak_action_timestamp(
-        input_path,
-        start_offset=trim_start,
-        duration=duration,
-        check_exists=False,
-    )
-    if peak_ts - trim_start > 3.0:
-        new_trim_start = max(trim_start, peak_ts - 2.0)
-        log.info("Peak action at %.2fs for %s, moving start to %.2fs", peak_ts, clip_id, new_trim_start)
-        trim_start = new_trim_start
+    if peak_action_trim:
+        peak_ts = find_peak_action_timestamp(
+            input_path,
+            start_offset=trim_start,
+            duration=duration,
+            check_exists=False,
+        )
+        if peak_ts - trim_start > 3.0:
+            new_trim_start = max(trim_start, peak_ts - 2.0)
+            log.info("Peak action at %.2fs for %s, moving start to %.2fs", peak_ts, clip_id, new_trim_start)
+            trim_start = new_trim_start
 
     mode = (facecam_mode or "auto").lower()
     if mode not in ("auto", "always", "off"):
@@ -440,7 +448,7 @@ def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
         encoded = True
 
     if encoded:
-        if not check_loop_compatibility(output_path, duration=duration):
+        if loop_optimize and not check_loop_compatibility(output_path, duration=duration):
             if _apply_loop_crossfade(output_path, crossfade_duration=0.3):
                 log.info("Applied 0.3s loop crossfade for %s", clip_id)
         return output_path

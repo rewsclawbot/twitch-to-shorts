@@ -119,6 +119,74 @@ class TestProcessSingleClip:
         assert result == "dry_run"
         assert yt_id is None
 
+    @patch("src.pipeline.apply_loop_crossfade", return_value=True)
+    @patch("src.pipeline.find_peak_action_timestamp", return_value=1.25)
+    @patch("src.pipeline.detect_leading_silence", return_value=0.0)
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
+    def test_post_crop_peak_and_loop_hooks_enabled(
+        self,
+        mock_dl,
+        mock_crop,
+        mock_clean,
+        mock_silence,
+        mock_peak,
+        mock_loop,
+        clip,
+        yt_service,
+        conn,
+        cfg,
+        streamer,
+        log,
+    ):
+        cfg.peak_action_trim = True
+        cfg.loop_optimize = True
+
+        result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log, dry_run=True)
+        assert result == "dry_run"
+        assert yt_id is None
+
+        mock_peak.assert_called_once_with("/tmp/test/clip_1_vertical.mp4")
+        mock_loop.assert_called_once_with("/tmp/test/clip_1_vertical.mp4", crossfade_duration=0.3)
+        _, kwargs = mock_crop.call_args
+        assert kwargs["peak_action_trim"] is True
+        assert kwargs["loop_optimize"] is False
+
+    @patch("src.pipeline.apply_loop_crossfade")
+    @patch("src.pipeline.find_peak_action_timestamp")
+    @patch("src.pipeline.detect_leading_silence", return_value=0.0)
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
+    def test_post_crop_peak_and_loop_hooks_disabled(
+        self,
+        mock_dl,
+        mock_crop,
+        mock_clean,
+        mock_silence,
+        mock_peak,
+        mock_loop,
+        clip,
+        yt_service,
+        conn,
+        cfg,
+        streamer,
+        log,
+    ):
+        cfg.peak_action_trim = False
+        cfg.loop_optimize = False
+
+        result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log, dry_run=True)
+        assert result == "dry_run"
+        assert yt_id is None
+
+        mock_peak.assert_not_called()
+        mock_loop.assert_not_called()
+        _, kwargs = mock_crop.call_args
+        assert kwargs["peak_action_trim"] is False
+        assert kwargs["loop_optimize"] is False
+
     @patch("src.pipeline.check_channel_for_duplicate", return_value="existing_yt_id")
     @patch("src.pipeline.build_upload_title", return_value="Test Title")
     def test_duplicate_detected(self, mock_title, mock_dedup,

@@ -76,6 +76,8 @@ class PipelineConfig:
     analytics_min_age_hours: int = 48
     analytics_sync_interval_hours: int = 24
     analytics_max_videos_per_run: int = 20
+    peak_action_trim: bool = True
+    loop_optimize: bool = True
     force_upload: bool = False
     posting_schedule: dict | None = None
 
@@ -121,6 +123,8 @@ class PipelineConfig:
 
         self.captions_enabled = bool(self.captions_enabled)
         self.instagram_enabled = bool(self.instagram_enabled)
+        self.peak_action_trim = bool(self.peak_action_trim)
+        self.loop_optimize = bool(self.loop_optimize)
         self.force_upload = bool(self.force_upload)
 
         if self.age_decay not in ("linear", "log"):

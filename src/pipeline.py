@@ -32,7 +32,14 @@ from src.instagram_uploader import (  # noqa: E402
 from src.models import PipelineConfig, StreamerConfig  # noqa: E402
 from src.title_optimizer import optimize_title  # noqa: E402
 from src.twitch_client import TwitchClient  # noqa: E402
-from src.video_processor import crop_to_vertical, detect_leading_silence, detect_visual_dead_frames, extract_thumbnail  # noqa: E402
+from src.video_processor import (  # noqa: E402
+    apply_loop_crossfade,
+    crop_to_vertical,
+    detect_leading_silence,
+    detect_visual_dead_frames,
+    extract_thumbnail,
+    find_peak_action_timestamp,
+)
 from src.youtube_analytics import fetch_video_metrics, get_analytics_service  # noqa: E402
 from src.youtube_reporting import fetch_reach_metrics, get_reporting_service  # noqa: E402
 from src.youtube_uploader import (  # noqa: E402
@@ -603,18 +610,31 @@ def _process_single_clip_with_context(clip, context: ProcessingContext):
         if subtitle_path:
             log.info("Generated captions for %s", clip.id)
 
+    peak_action_trim_enabled = bool(getattr(cfg, "peak_action_trim", True))
+    loop_optimize_enabled = bool(getattr(cfg, "loop_optimize", True))
+
     vertical_path = crop_to_vertical(
         video_path, cfg.tmp_dir, cfg.max_clip_duration_seconds,
         facecam=streamer.facecam,
         facecam_mode=streamer.facecam_mode,
         subtitle_path=subtitle_path,
         silence_offset=silence_offset,
+        peak_action_trim=peak_action_trim_enabled,
+        loop_optimize=False,
     )
     thumbnail_path = None
     if not vertical_path:
         increment_fail_count(conn, clip)
         _cleanup_tmp_files(video_path, subtitle_path)
         return "processed_fail", None
+
+    if peak_action_trim_enabled:
+        peak_ts = find_peak_action_timestamp(vertical_path)
+        log.info("Post-crop peak action timestamp for %s: %.2fs", clip.id, peak_ts)
+
+    if loop_optimize_enabled:
+        if apply_loop_crossfade(vertical_path, crossfade_duration=0.3):
+            log.info("Applied 0.3s loop crossfade for %s", clip.id)
 
     if dry_run:
         log.info("[DRY RUN] Would upload clip %s: %s", clip.id, clip.title)
