@@ -1,9 +1,15 @@
 twitch: null
 youtube:
   client_secrets_file: credentials/client_secret.json
+  thumbnail_enabled: true
+  thumbnail_samples: 8
+  thumbnail_width: 1080
   title_templates:
   - '{title} | {game}'
   - '{game} | {title}'
+  - 'When {title} in {game}...'
+  - '{title} 😱 | {game}'
+  - 'This {game} moment is INSANE | {title}'
 instagram:
   caption_templates:
   - '{title}'
@@ -47,3 +53,4 @@ pipeline:
   analytics_min_age_hours: 24
   analytics_sync_interval_hours: 24
   analytics_max_videos_per_run: 20
+  captions_enabled: true

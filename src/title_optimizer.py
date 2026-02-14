@@ -1,11 +1,16 @@
 """AI-powered Twitch clip title optimization for YouTube Shorts."""
 
-# Dependency: openai>=1.0.0
+# Dependency: anthropic>=0.30.0 or openai>=1.0.0
 
 import hashlib
 import logging
 import os
 import time
+
+try:
+    import anthropic  # type: ignore[import-not-found]
+except ImportError:
+    anthropic = None
 
 try:
     from openai import OpenAI  # type: ignore[import-not-found]
@@ -14,6 +19,7 @@ except ImportError:
 
 log = logging.getLogger(__name__)
 
+_ANTHROPIC_MODEL = "claude-opus-4-0-20250514"
 _LLM_MODEL = "gpt-4o-mini"
 _MAX_TITLE_LEN = 100
 _LLM_MAX_TITLE_LEN = 80
@@ -43,16 +49,8 @@ def _should_optimize(clip_id: str) -> bool:
 
 
 def _rewrite_title_with_llm(clip_title: str, streamer_name: str, game_name: str) -> str | None:
-    """Rewrite a clip title with an OpenAI-compatible LLM, returning None on failure."""
-    base_url = os.environ.get("LLM_BASE_URL")
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not base_url and not api_key:
-        return None
-    if OpenAI is None:
-        log.warning("openai package not installed, skipping title rewrite")
-        return None
-
-    system_prompt = (
+    """Rewrite a clip title using Claude Opus (preferred) or OpenAI fallback."""
+    _SYSTEM_PROMPT = (
         "You rewrite Twitch clip titles for YouTube Shorts to maximize click-through rate.\n"
         "Analytics show these patterns WIN:\n"
         "- Funny quotes or memorable moments from the clip (highest CTR)\n"
@@ -76,11 +74,44 @@ def _rewrite_title_with_llm(clip_title: str, streamer_name: str, game_name: str)
         f"Game: {game_name}"
     )
 
+    # Try Anthropic (Claude Opus) first
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+    if anthropic_key and anthropic is not None:
+        for attempt in range(_LLM_MAX_ATTEMPTS):
+            try:
+                client = anthropic.Anthropic(api_key=anthropic_key)
+                response = client.messages.create(
+                    model=_ANTHROPIC_MODEL,
+                    max_tokens=100,
+                    system=_SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": user_prompt}],
+                )
+                content = response.content[0].text if response.content else ""
+                rewritten = content.strip().splitlines()[0].strip().strip("\"'")
+                if rewritten:
+                    log.info("Claude Opus title: '%s' -> '%s'", clip_title, rewritten)
+                    return _truncate_title(rewritten, _LLM_MAX_TITLE_LEN)
+                log.warning("Claude returned empty title for '%s'", clip_title)
+                return None
+            except Exception:
+                log.warning("Claude title rewrite attempt %d failed for '%s'", attempt + 1, clip_title, exc_info=True)
+                if attempt < _LLM_MAX_ATTEMPTS - 1:
+                    time.sleep(_LLM_RETRY_BACKOFF_SECONDS)
+        log.warning("All Claude attempts failed, falling back to OpenAI")
+
+    # Fallback to OpenAI-compatible API
+    base_url = os.environ.get("LLM_BASE_URL")
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not base_url and not api_key:
+        return None
+    if OpenAI is None:
+        log.warning("openai package not installed, skipping title rewrite")
+        return None
+
     model_name = os.environ.get("LLM_MODEL_NAME", _LLM_MODEL)
     client_kwargs: dict[str, str] = {"api_key": api_key or "not-needed"}
     if base_url:
         client_kwargs["base_url"] = base_url
-        log.debug("Using local LLM at %s with model %s", base_url, model_name)
 
     client = OpenAI(**client_kwargs)
     for attempt in range(_LLM_MAX_ATTEMPTS):
@@ -88,7 +119,7 @@ def _rewrite_title_with_llm(clip_title: str, streamer_name: str, game_name: str)
             response = client.chat.completions.create(
                 model=model_name,
                 messages=[
-                    {"role": "system", "content": system_prompt},
+                    {"role": "system", "content": _SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
                 timeout=_LLM_TIMEOUT_SECONDS,
