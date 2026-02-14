@@ -12,10 +12,12 @@ from src.video_processor import (
     _escape_subtitle_path,
     _probe_video_info,
     _run_ffmpeg,
+    check_loop_compatibility,
     crop_to_vertical,
     detect_leading_silence,
     detect_visual_dead_frames,
     extract_thumbnail,
+    find_peak_action_timestamp,
 )
 
 
@@ -671,3 +673,94 @@ class TestCropToVerticalVisualDeadFrames:
         # _run_ffmpeg should be called with ss=0.0
         _, kwargs = mock_ffmpeg.call_args
         assert kwargs.get("ss") == 0.0
+
+
+class TestFindPeakActionTimestamp:
+    @patch("src.video_processor.os.path.exists", return_value=True)
+    @patch("src.video_processor._batch_sample_ydif")
+    def test_returns_peak_window_center(self, mock_batch, mock_exists):
+        # 1s window score (2 samples) peaks around index 2 -> center near 1.35s
+        mock_batch.return_value = [0.1, 0.2, 5.0, 6.0, 0.1, 0.2]
+        result = find_peak_action_timestamp("test.mp4", duration=4.0)
+        assert result == pytest.approx(1.35, abs=0.05)
+
+    @patch("src.video_processor.os.path.exists", return_value=True)
+    @patch("src.video_processor._batch_sample_ydif", return_value=[])
+    def test_failure_returns_start_offset(self, mock_batch, mock_exists):
+        result = find_peak_action_timestamp("test.mp4", start_offset=2.0, duration=8.0)
+        assert result == 2.0
+
+    @patch("src.video_processor.os.path.exists", return_value=False)
+    def test_missing_file_returns_start_offset(self, mock_exists):
+        # When duration is None, missing file triggers early return
+        result = find_peak_action_timestamp("missing.mp4", start_offset=1.5)
+        assert result == 1.5
+
+
+class TestLoopCompatibility:
+    @patch("src.video_processor.os.path.exists", return_value=True)
+    @patch("src.video_processor._get_duration", return_value=20.0)
+    @patch("src.video_processor.subprocess.run")
+    def test_low_ydif_is_compatible(self, mock_run, mock_duration, mock_exists):
+        mock_run.return_value = MagicMock(
+            stderr="[Parsed_signalstats] signalstats.YDIF=3.2",
+            returncode=0,
+        )
+        assert check_loop_compatibility("test.mp4") is True
+
+    @patch("src.video_processor.os.path.exists", return_value=True)
+    @patch("src.video_processor._get_duration", return_value=20.0)
+    @patch("src.video_processor.subprocess.run")
+    def test_high_ydif_is_not_compatible(self, mock_run, mock_duration, mock_exists):
+        mock_run.return_value = MagicMock(
+            stderr="[Parsed_signalstats] signalstats.YDIF=15.0",
+            returncode=0,
+        )
+        assert check_loop_compatibility("test.mp4") is False
+
+    @patch("src.video_processor.os.path.exists", return_value=True)
+    @patch("src.video_processor._get_duration", return_value=20.0)
+    @patch("src.video_processor.subprocess.run")
+    def test_missing_metric_defaults_compatible(self, mock_run, mock_duration, mock_exists):
+        mock_run.return_value = MagicMock(stderr="no metrics", returncode=0)
+        assert check_loop_compatibility("test.mp4") is True
+
+
+class TestCropToVerticalPeakAndLoop:
+    @patch("src.video_processor.check_loop_compatibility", return_value=True)
+    @patch("src.video_processor.find_peak_action_timestamp", return_value=8.0)
+    @patch("src.video_processor.detect_visual_dead_frames", return_value=0.0)
+    @patch("src.video_processor._run_ffmpeg")
+    @patch("src.video_processor._measure_loudness", return_value=None)
+    @patch("src.video_processor.detect_leading_silence", return_value=0.0)
+    @patch("src.video_processor._probe_video_info", return_value=(30.0, (1920, 1080)))
+    @patch("src.video_processor.os.path.exists", return_value=False)
+    def test_peak_action_shifts_trim_start(self, mock_exists, mock_probe, mock_silence,
+                                           mock_loudness, mock_ffmpeg, mock_visual,
+                                           mock_peak, mock_loop):
+        mock_ffmpeg.return_value = True
+        with patch.dict("os.environ", {"DISABLE_GPU_ENCODE": "1"}):
+            crop_to_vertical("test.mp4", "/tmp/test", facecam_mode="off")
+        _, kwargs = mock_ffmpeg.call_args
+        assert kwargs.get("ss") == pytest.approx(6.0)
+
+    @patch("src.video_processor._apply_loop_crossfade", return_value=True)
+    @patch("src.video_processor.check_loop_compatibility", return_value=False)
+    @patch("src.video_processor.find_peak_action_timestamp", return_value=0.0)
+    @patch("src.video_processor.detect_visual_dead_frames", return_value=0.0)
+    @patch("src.video_processor._run_ffmpeg")
+    @patch("src.video_processor._measure_loudness", return_value=None)
+    @patch("src.video_processor.detect_leading_silence", return_value=0.0)
+    @patch("src.video_processor._probe_video_info", return_value=(30.0, (1920, 1080)))
+    @patch("src.video_processor.os.path.exists", return_value=False)
+    def test_incompatible_loop_applies_crossfade(self, mock_exists, mock_probe, mock_silence,
+                                                 mock_loudness, mock_ffmpeg, mock_visual,
+                                                 mock_peak, mock_loop, mock_crossfade):
+        mock_ffmpeg.return_value = True
+        with patch.dict("os.environ", {"DISABLE_GPU_ENCODE": "1"}):
+            output = crop_to_vertical("test.mp4", "/tmp/test", facecam_mode="off")
+        assert output is not None
+        mock_crossfade.assert_called_once()
+        args, kwargs = mock_crossfade.call_args
+        assert args[0].endswith("_vertical.mp4")
+        assert kwargs.get("crossfade_duration") == pytest.approx(0.3)

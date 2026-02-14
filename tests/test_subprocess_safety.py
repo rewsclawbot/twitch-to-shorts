@@ -131,7 +131,7 @@ class TestVideoProcessorSubprocessSafety:
 
         crop_to_vertical(filename, "/tmp/test", facecam_mode="off")
 
-        call_args = mock_popen.call_args
-        cmd = call_args[0][0]
-        assert isinstance(cmd, list), "Popen must use list args"
-        assert filename in cmd
+        commands = [c[0][0] for c in mock_popen.call_args_list if c[0]]
+        assert commands, "Expected at least one Popen invocation"
+        assert all(isinstance(cmd, list) for cmd in commands), "Popen must use list args"
+        assert any(filename in cmd for cmd in commands)

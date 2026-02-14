@@ -208,6 +208,147 @@ def detect_visual_dead_frames(input_path: str, start_offset: float = 0.0, ydif_t
         return 0.0
 
 
+def find_peak_action_timestamp(
+    video_path: str,
+    start_offset: float = 0.0,
+    sample_interval: float = 0.5,
+    duration: float | None = None,
+    check_exists: bool = True,
+) -> float:
+    """Find timestamp of peak visual activity using YDIF sampled across the clip.
+
+    Activity is scored in 1-second windows (2 samples at 0.5s interval).
+    Returns start_offset on failure.
+    """
+    if check_exists and not os.path.exists(video_path):
+        return max(0.0, start_offset)
+
+    if duration is None:
+        duration = _get_duration(video_path)
+    if not duration or duration <= 0:
+        return max(0.0, start_offset)
+
+    start = max(0.0, start_offset)
+    if start >= duration:
+        return start
+
+    # Ensure at least one timestamp and avoid sampling exactly at clip EOF.
+    timestamps: list[float] = []
+    ts = min(start + 0.1, max(duration - 0.1, start))
+    while ts < duration:
+        timestamps.append(ts)
+        ts += max(sample_interval, 0.1)
+    if not timestamps:
+        return start
+
+    scores = _batch_sample_ydif(video_path, timestamps)
+    if not scores:
+        return start
+
+    window_size = max(int(round(1.0 / max(sample_interval, 0.1))), 1)
+    if len(scores) < window_size:
+        best_idx = max(range(len(scores)), key=lambda i: scores[i])
+        return timestamps[best_idx]
+
+    best_idx = 0
+    best_score = -1.0
+    for i in range(0, len(scores) - window_size + 1):
+        window = scores[i:i + window_size]
+        window_score = sum(window) / window_size
+        if window_score > best_score:
+            best_score = window_score
+            best_idx = i
+    # Return center timestamp of the best 1s window.
+    center_offset = (window_size - 1) * sample_interval / 2
+    return timestamps[best_idx] + center_offset
+
+
+def check_loop_compatibility(
+    video_path: str,
+    ydif_threshold: float = 8.0,
+    duration: float | None = None,
+) -> bool:
+    """Check if first/last 0.5s are visually compatible for seamless looping.
+
+    Returns True when loop is already smooth, False when a transition is recommended.
+    """
+    if duration is None:
+        if not os.path.exists(video_path):
+            return True
+        duration = _get_duration(video_path)
+    if not duration or duration < 1.0:
+        return True
+
+    cmd = [
+        FFMPEG,
+        "-ss", "0",
+        "-i", video_path,
+        "-sseof", "-0.5",
+        "-i", video_path,
+        "-filter_complex",
+        "[0:v]trim=end_frame=1,setpts=PTS-STARTPTS[first];"
+        "[1:v]trim=end_frame=1,setpts=PTS-STARTPTS[last];"
+        "[first][last]blend=all_mode=difference,signalstats,metadata=print,trim=end_frame=1[out]",
+        "-map", "[out]",
+        "-f", "null",
+        "-",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        ydif_values: list[float] = []
+        for line in result.stderr.splitlines():
+            if "signalstats.YDIF=" in line:
+                with contextlib.suppress(ValueError, IndexError):
+                    ydif_values.append(float(line.split("YDIF=")[1]))
+        if not ydif_values:
+            return True
+        return ydif_values[-1] <= ydif_threshold
+    except Exception as e:
+        log.warning("Loop compatibility check failed for %s: %s", video_path, e)
+        return True
+
+
+def _apply_loop_crossfade(video_path: str, crossfade_duration: float = 0.3) -> bool:
+    """Apply a short end->start crossfade to smooth looping."""
+    duration = _get_duration(video_path)
+    if not duration or duration <= crossfade_duration:
+        return False
+
+    offset = max(duration - crossfade_duration, 0.0)
+    tmp_output = video_path + ".loop.tmp.mp4"
+    cmd = [
+        FFMPEG,
+        "-y",
+        "-i", video_path,
+        "-i", video_path,
+        "-filter_complex",
+        (
+            f"[1:v]trim=duration={crossfade_duration:.3f},setpts=PTS-STARTPTS[head];"
+            f"[0:v][head]xfade=transition=fade:duration={crossfade_duration:.3f}:offset={offset:.3f}[v]"
+        ),
+        "-map", "[v]",
+        "-map", "0:a?",
+        "-c:v", "libx264",
+        "-crf", "20",
+        "-preset", "fast",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-shortest",
+        tmp_output,
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=180)
+        if not os.path.exists(tmp_output) or os.path.getsize(tmp_output) == 0:
+            safe_remove(tmp_output)
+            return False
+        os.replace(tmp_output, video_path)
+        return True
+    except Exception as e:
+        log.warning("Loop crossfade application failed for %s: %s", video_path, e)
+        safe_remove(tmp_output)
+        return False
+
+
 def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
                      facecam: FacecamConfig | None = None,
                      facecam_mode: str = "auto",
@@ -246,6 +387,17 @@ def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
         log.info("Trimming additional %.2fs visual dead frames from %s", visual_trim, clip_id)
         trim_start += visual_trim
 
+    peak_ts = find_peak_action_timestamp(
+        input_path,
+        start_offset=trim_start,
+        duration=duration,
+        check_exists=False,
+    )
+    if peak_ts - trim_start > 3.0:
+        new_trim_start = max(trim_start, peak_ts - 2.0)
+        log.info("Peak action at %.2fs for %s, moving start to %.2fs", peak_ts, clip_id, new_trim_start)
+        trim_start = new_trim_start
+
     mode = (facecam_mode or "auto").lower()
     if mode not in ("auto", "always", "off"):
         log.warning("Unknown facecam_mode '%s', defaulting to 'auto'", facecam_mode)
@@ -281,9 +433,16 @@ def crop_to_vertical(input_path: str, tmp_dir: str, max_duration: int = 60,
     skip_gpu = os.environ.get("DISABLE_GPU_ENCODE", "").lower() in ("1", "true", "yes")
 
     # Try GPU encode first (if not disabled), fall back to CPU
+    encoded = False
     if not skip_gpu and _run_ffmpeg(input_path, output_path, vf, clip_id, gpu=True, ss=trim_start, loudness=loudness, subtitle_path=subtitle_path):
-        return output_path
-    if _run_ffmpeg(input_path, output_path, vf, clip_id, gpu=False, ss=trim_start, loudness=loudness, subtitle_path=subtitle_path):
+        encoded = True
+    elif _run_ffmpeg(input_path, output_path, vf, clip_id, gpu=False, ss=trim_start, loudness=loudness, subtitle_path=subtitle_path):
+        encoded = True
+
+    if encoded:
+        if not check_loop_compatibility(output_path, duration=duration):
+            if _apply_loop_crossfade(output_path, crossfade_duration=0.3):
+                log.info("Applied 0.3s loop crossfade for %s", clip_id)
         return output_path
 
     return None
