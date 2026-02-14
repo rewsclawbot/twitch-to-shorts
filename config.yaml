@@ -7,8 +7,8 @@ youtube:
   client_secrets_file: "credentials/client_secret.json"
   # A/B title templates (deterministic per clip_id via MD5)
   title_templates:
-    - "{title}"
     - "{title} | {game}"
+    - "{game} | {title}"
   # Optional single template (overridden by title_templates if both set):
   # title_template: "{title}"
   # description_template: "Clip from {streamer}'s stream\n\n#Shorts"
@@ -54,8 +54,8 @@ streamers:
   #   youtube_credentials: "credentials/shroud_youtube.json"
 
 pipeline:
-  max_clips_per_streamer: 6
-  max_clip_duration_seconds: 60
+  max_clips_per_streamer: 8
+  max_clip_duration_seconds: 45
   velocity_weight: 2.0
   clip_lookback_hours: 168  # 7 days
   # Scoring options (optional)
@@ -63,6 +63,9 @@ pipeline:
   age_decay: "log"  # linear | log
   view_transform: "linear"  # linear | log
   title_quality_weight: 0.05  # 0.0 disables title bonus
+  duration_bonus_weight: 0.3
+  optimal_duration_min: 14
+  optimal_duration_max: 31
   tmp_dir: "data/tmp"
   db_path: "data/clips.db"
   log_file: "data/pipeline.log"
@@ -78,7 +81,6 @@ pipeline:
 # Captions (burned-in subtitles -- requires DEEPGRAM_API_KEY env var)
 # captions:
 #   enabled: false
-
 
 
 
