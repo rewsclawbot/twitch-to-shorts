@@ -36,12 +36,35 @@ def _transform_views(views: int, view_transform: str) -> float:
     return float(views)
 
 
+def _duration_bonus(duration: float, optimal_min: int = 14, optimal_max: int = 31) -> float:
+    """
+    Return a multiplier bonus for clips in the optimal duration range.
+
+    - Clips in [optimal_min, optimal_max]: 1.0 (baseline)
+    - Clips shorter than optimal_min: linear penalty down to 0.7 at 0s
+    - Clips longer than optimal_max: linear penalty down to 0.5 at 60s
+    """
+    if optimal_min <= duration <= optimal_max:
+        return 1.0
+    if duration < optimal_min:
+        # Linear interpolation: 0.7 at 0s, 1.0 at optimal_min
+        return 0.7 + (0.3 * (duration / max(optimal_min, 1)))
+
+    # Linear interpolation: 1.0 at optimal_max, 0.5 at 60s
+    max_overage = max(60 - optimal_max, 1)
+    overage = min(max(duration - optimal_max, 0), max_overage)
+    return 1.0 - (0.5 * (overage / max_overage))
+
+
 def compute_score(
     clip: Clip,
     velocity_weight: float = 2.0,
     age_decay: str = "linear",
     view_transform: str = "linear",
     title_quality_weight: float = 0.0,
+    duration_bonus_weight: float = 0.0,
+    optimal_duration_min: int = 14,
+    optimal_duration_max: int = 31,
 ) -> float:
     created = datetime.fromisoformat(clip.created_at)
     age_hours = max((datetime.now(UTC) - created).total_seconds() / 3600, 0.1)
@@ -51,6 +74,9 @@ def compute_score(
     duration = max(clip.duration, 1)
     density = views / duration
     score = density + velocity * velocity_weight
+    if duration_bonus_weight > 0:
+        bonus = _duration_bonus(duration, optimal_duration_min, optimal_duration_max)
+        score *= 1.0 + duration_bonus_weight * (bonus - 1.0)
     if title_quality_weight > 0:
         score *= 1.0 + title_quality_weight * _title_quality(clip.title)
     return score
@@ -65,6 +91,9 @@ def filter_and_rank(
     age_decay: str = "linear",
     view_transform: str = "linear",
     title_quality_weight: float = 0.0,
+    duration_bonus_weight: float = 0.0,
+    optimal_duration_min: int = 14,
+    optimal_duration_max: int = 31,
     analytics_enabled: bool = False,
 ) -> list[Clip]:
     """Score and rank all clips that pass the quality floor. Returns all passing clips sorted by score."""
@@ -83,6 +112,9 @@ def filter_and_rank(
             age_decay=age_decay,
             view_transform=view_transform,
             title_quality_weight=title_quality_weight,
+            duration_bonus_weight=duration_bonus_weight,
+            optimal_duration_min=optimal_duration_min,
+            optimal_duration_max=optimal_duration_max,
         )
 
     if analytics_enabled:

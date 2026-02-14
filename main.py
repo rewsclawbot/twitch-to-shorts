@@ -618,6 +618,9 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
         age_decay=cfg.age_decay,
         view_transform=cfg.view_transform,
         title_quality_weight=cfg.title_quality_weight,
+        duration_bonus_weight=cfg.duration_bonus_weight,
+        optimal_duration_min=cfg.optimal_duration_min,
+        optimal_duration_max=cfg.optimal_duration_max,
         analytics_enabled=cfg.analytics_enabled,
     )
 

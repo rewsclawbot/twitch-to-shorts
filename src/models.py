@@ -61,6 +61,9 @@ class PipelineConfig:
     age_decay: str = "log"
     view_transform: str = "linear"
     title_quality_weight: float = 0.05
+    duration_bonus_weight: float = 0.0
+    optimal_duration_min: int = 14
+    optimal_duration_max: int = 31
     tmp_dir: str = "data/tmp"
     db_path: str = "data/clips.db"
     log_file: str = "data/pipeline.log"
@@ -80,6 +83,8 @@ class PipelineConfig:
             ("max_clip_duration_seconds", self.max_clip_duration_seconds),
             ("clip_lookback_hours", self.clip_lookback_hours),
             ("min_view_count", self.min_view_count),
+            ("optimal_duration_min", self.optimal_duration_min),
+            ("optimal_duration_max", self.optimal_duration_max),
             ("upload_spacing_hours", self.upload_spacing_hours),
             ("max_uploads_per_window", self.max_uploads_per_window),
             ("analytics_min_age_hours", self.analytics_min_age_hours),
@@ -99,6 +104,7 @@ class PipelineConfig:
         float_fields = [
             ("velocity_weight", self.velocity_weight),
             ("title_quality_weight", self.title_quality_weight),
+            ("duration_bonus_weight", self.duration_bonus_weight),
         ]
         for name, numeric_value in float_fields:
             if not isinstance(numeric_value, (int, float)):
@@ -117,6 +123,11 @@ class PipelineConfig:
             errors.append(f"age_decay must be 'linear' or 'log', got {self.age_decay!r}")
         if self.view_transform not in ("linear", "log"):
             errors.append(f"view_transform must be 'linear' or 'log', got {self.view_transform!r}")
+        if self.optimal_duration_min > self.optimal_duration_max:
+            errors.append(
+                "optimal_duration_min must be <= optimal_duration_max, got "
+                f"{self.optimal_duration_min} > {self.optimal_duration_max}"
+            )
 
         if errors:
             raise ValueError("Invalid PipelineConfig:\n" + "\n".join(f"- {e}" for e in errors))

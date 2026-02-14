@@ -68,6 +68,47 @@ class TestComputeScore:
         boosted = compute_score(clip, title_quality_weight=0.1)
         assert boosted > base
 
+    def test_duration_bonus_favors_optimal_range(self):
+        now = datetime.now(UTC)
+        optimal = make_clip(
+            clip_id="optimal",
+            view_count=1000,
+            duration=20,
+            created_at=(now - timedelta(hours=1)).isoformat(),
+        )
+        long_clip = make_clip(
+            clip_id="long",
+            view_count=1000,
+            duration=45,
+            created_at=(now - timedelta(hours=1)).isoformat(),
+        )
+        optimal_score = compute_score(optimal, duration_bonus_weight=0.3)
+        long_score = compute_score(long_clip, duration_bonus_weight=0.3)
+        assert optimal_score > long_score
+
+    def test_duration_bonus_can_flip_short_clip_advantage(self):
+        now = datetime.now(UTC)
+        very_short = make_clip(
+            clip_id="short",
+            view_count=1000,
+            duration=10,
+            created_at=(now - timedelta(hours=1)).isoformat(),
+        )
+        optimal = make_clip(
+            clip_id="optimal",
+            view_count=1000,
+            duration=14,
+            created_at=(now - timedelta(hours=1)).isoformat(),
+        )
+
+        short_without_bonus = compute_score(very_short, duration_bonus_weight=0.0)
+        optimal_without_bonus = compute_score(optimal, duration_bonus_weight=0.0)
+        assert short_without_bonus > optimal_without_bonus
+
+        short_with_bonus = compute_score(very_short, duration_bonus_weight=1.0)
+        optimal_with_bonus = compute_score(optimal, duration_bonus_weight=1.0)
+        assert optimal_with_bonus > short_with_bonus
+
 
 class TestFilterAndRank:
     def test_empty_input_returns_empty(self, conn):
@@ -97,3 +138,22 @@ class TestFilterAndRank:
         result = filter_and_rank(conn, clips, "s", min_view_count=500)
         assert len(result) == 1
         assert result[0].id == "high_1"
+
+    def test_duration_bonus_weight_changes_ranking(self, conn):
+        now = datetime.now(UTC)
+        clips = [
+            make_clip(
+                clip_id="short",
+                view_count=1000,
+                duration=10,
+                created_at=(now - timedelta(hours=1)).isoformat(),
+            ),
+            make_clip(
+                clip_id="optimal",
+                view_count=1000,
+                duration=14,
+                created_at=(now - timedelta(hours=1)).isoformat(),
+            ),
+        ]
+        ranked = filter_and_rank(conn, clips, "s", duration_bonus_weight=1.0)
+        assert ranked[0].id == "optimal"
