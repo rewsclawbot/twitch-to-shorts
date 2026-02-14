@@ -182,12 +182,32 @@ def _render_template(template: str, clip: Clip) -> str:
     return template.format_map(values)
 
 
-def _choose_template(clip_id: str, templates: list[str] | None) -> str | None:
+def _choose_template_index(clip_id: str, templates: list[str] | None) -> int | None:
     if not templates:
         return None
     digest = hashlib.md5(clip_id.encode("utf-8")).hexdigest()
-    idx = int(digest, 16) % len(templates)
+    return int(digest, 16) % len(templates)
+
+
+def _choose_template(clip_id: str, templates: list[str] | None) -> str | None:
+    idx = _choose_template_index(clip_id, templates)
+    if idx is None:
+        return None
     return templates[idx]
+
+
+def get_title_variant_label(
+    clip: Clip,
+    title_template: str | None = None,
+    title_templates: list[str] | None = None,
+) -> str:
+    """Return a stable label for the chosen title path."""
+    idx = _choose_template_index(clip.id, title_templates)
+    if idx is not None:
+        return f"template_{idx}"
+    if title_template:
+        return "template_default"
+    return "original"
 
 
 def _dedupe_tags(tags: list[str]) -> list[str]:
@@ -236,9 +256,20 @@ def build_upload_title(
     title_templates: list[str] | None = None,
 ) -> str:
     """Build the YouTube title for a clip using the same logic as upload_short."""
+    title, _ = build_upload_title_with_variant(clip, title_template, title_templates)
+    return title
+
+
+def build_upload_title_with_variant(
+    clip: Clip,
+    title_template: str | None = None,
+    title_templates: list[str] | None = None,
+) -> tuple[str, str]:
+    """Build the upload title and return the selected title variant label."""
+    variant = get_title_variant_label(clip, title_template, title_templates)
     chosen_title = _choose_template(clip.id, title_templates) or title_template
     raw_title = _render_template(chosen_title, clip) if chosen_title else clip.title
-    return _truncate_title(_sanitize_text(raw_title))
+    return _truncate_title(_sanitize_text(raw_title)), variant
 
 
 def upload_short(

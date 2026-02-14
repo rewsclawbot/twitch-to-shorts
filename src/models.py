@@ -13,6 +13,7 @@ class Clip:
     streamer: str = ""
     channel_key: str = ""
     game_name: str = ""
+    title_variant: str = ""
     score: float = 0.0
     youtube_id: str | None = None
     instagram_id: str | None = None

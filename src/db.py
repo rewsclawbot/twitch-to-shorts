@@ -25,11 +25,14 @@ def init_schema(conn: sqlite3.Connection):
             streamer TEXT NOT NULL,
             channel_key TEXT,
             title TEXT,
+            title_variant TEXT,
             view_count INTEGER,
             created_at TEXT,
+            game_name TEXT,
             posted_at TEXT,
             youtube_id TEXT,
             fail_count INTEGER DEFAULT 0,
+            last_failed_at TEXT,
             yt_views INTEGER,
             yt_estimated_minutes_watched REAL,
             yt_avg_view_duration REAL,
@@ -70,6 +73,12 @@ def init_schema(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE clips ADD COLUMN fail_count INTEGER DEFAULT 0")
     if "channel_key" not in cols:
         conn.execute("ALTER TABLE clips ADD COLUMN channel_key TEXT")
+    if "title_variant" not in cols:
+        conn.execute("ALTER TABLE clips ADD COLUMN title_variant TEXT")
+    if "game_name" not in cols:
+        conn.execute("ALTER TABLE clips ADD COLUMN game_name TEXT")
+    if "last_failed_at" not in cols:
+        conn.execute("ALTER TABLE clips ADD COLUMN last_failed_at TEXT")
     # Index on channel_key must be created AFTER the migration adds the column
     conn.execute("CREATE INDEX IF NOT EXISTS idx_clips_channel ON clips(channel_key)")
     if "yt_views" not in cols:
@@ -221,20 +230,22 @@ def get_todays_runs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 def insert_clip(conn: sqlite3.Connection, clip: Clip):
     conn.execute(
-        """INSERT INTO clips (clip_id, streamer, channel_key, title, view_count, created_at, posted_at, youtube_id, duration, vod_id, vod_offset, instagram_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """INSERT INTO clips (clip_id, streamer, channel_key, title, title_variant, view_count, created_at, game_name, posted_at, youtube_id, duration, vod_id, vod_offset, instagram_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(clip_id) DO UPDATE SET
                youtube_id = excluded.youtube_id,
                posted_at = excluded.posted_at,
                view_count = excluded.view_count,
                title = excluded.title,
+               title_variant = COALESCE(NULLIF(excluded.title_variant, ''), clips.title_variant),
                channel_key = excluded.channel_key,
+               game_name = COALESCE(NULLIF(excluded.game_name, ''), clips.game_name),
                duration = COALESCE(excluded.duration, clips.duration),
                vod_id = COALESCE(excluded.vod_id, clips.vod_id),
                vod_offset = COALESCE(excluded.vod_offset, clips.vod_offset),
                instagram_id = COALESCE(excluded.instagram_id, clips.instagram_id)""",
-        (clip.id, clip.streamer, clip.channel_key, clip.title, clip.view_count,
-         clip.created_at, datetime.now(UTC).isoformat(), clip.youtube_id,
+        (clip.id, clip.streamer, clip.channel_key, clip.title, getattr(clip, "title_variant", ""), clip.view_count,
+         clip.created_at, clip.game_name, datetime.now(UTC).isoformat(), clip.youtube_id,
          clip.duration, getattr(clip, 'vod_id', None), getattr(clip, 'vod_offset', None),
          getattr(clip, 'instagram_id', None)),
     )
@@ -244,18 +255,20 @@ def insert_clip(conn: sqlite3.Connection, clip: Clip):
 def record_known_clip(conn: sqlite3.Connection, clip: Clip):
     """Record a clip that's already on YouTube (duplicate). Does not set posted_at."""
     conn.execute(
-        """INSERT INTO clips (clip_id, streamer, channel_key, title, view_count, created_at, youtube_id, duration, vod_id, vod_offset, instagram_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """INSERT INTO clips (clip_id, streamer, channel_key, title, title_variant, view_count, created_at, game_name, youtube_id, duration, vod_id, vod_offset, instagram_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(clip_id) DO UPDATE SET
                youtube_id = COALESCE(clips.youtube_id, excluded.youtube_id),
                view_count = excluded.view_count,
                title = excluded.title,
+               title_variant = COALESCE(NULLIF(excluded.title_variant, ''), clips.title_variant),
                channel_key = excluded.channel_key,
+               game_name = COALESCE(NULLIF(excluded.game_name, ''), clips.game_name),
                duration = COALESCE(excluded.duration, clips.duration),
                vod_id = COALESCE(excluded.vod_id, clips.vod_id),
                vod_offset = COALESCE(excluded.vod_offset, clips.vod_offset),
                instagram_id = COALESCE(excluded.instagram_id, clips.instagram_id)""",
-        (clip.id, clip.streamer, clip.channel_key, clip.title, clip.view_count, clip.created_at, clip.youtube_id,
+        (clip.id, clip.streamer, clip.channel_key, clip.title, getattr(clip, "title_variant", ""), clip.view_count, clip.created_at, clip.game_name, clip.youtube_id,
          clip.duration, getattr(clip, 'vod_id', None), getattr(clip, 'vod_offset', None),
          getattr(clip, 'instagram_id', None)),
     )
@@ -290,11 +303,18 @@ def update_streamer_stats(conn: sqlite3.Connection, streamer: str):
 
 def increment_fail_count(conn: sqlite3.Connection, clip: Clip):
     """Record a processing failure. Upserts clip row and increments fail_count."""
+    failed_at = datetime.now(UTC).isoformat()
     conn.execute(
-        """INSERT INTO clips (clip_id, streamer, channel_key, created_at, fail_count)
-           VALUES (?, ?, ?, ?, 1)
-           ON CONFLICT(clip_id) DO UPDATE SET fail_count = fail_count + 1""",
-        (clip.id, clip.streamer, clip.channel_key, clip.created_at),
+        """INSERT INTO clips (clip_id, streamer, channel_key, title, created_at, game_name, fail_count, last_failed_at)
+           VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+           ON CONFLICT(clip_id) DO UPDATE SET
+               fail_count = fail_count + 1,
+               last_failed_at = excluded.last_failed_at,
+               channel_key = COALESCE(excluded.channel_key, clips.channel_key),
+               title = COALESCE(excluded.title, clips.title),
+               game_name = COALESCE(NULLIF(excluded.game_name, ''), clips.game_name),
+               created_at = COALESCE(clips.created_at, excluded.created_at)""",
+        (clip.id, clip.streamer, clip.channel_key, clip.title, clip.created_at, clip.game_name, failed_at),
     )
     conn.commit()
 
@@ -406,6 +426,92 @@ def get_streamer_performance_multiplier(conn: sqlite3.Connection, streamer: str)
     baseline_ctr = 0.02
     multiplier = 0.5 + 0.5 * (avg_ctr / baseline_ctr)
     return max(0.5, min(2.0, multiplier))
+
+
+def get_title_variant_performance(
+    conn: sqlite3.Connection,
+    streamer: str,
+    min_samples: int = 5,
+) -> dict[str, float]:
+    """Return per-title-variant CTR multipliers relative to this streamer's baseline."""
+    baseline = conn.execute(
+        """SELECT AVG(yt_impressions_ctr) as avg_ctr, COUNT(*) as cnt
+           FROM clips
+           WHERE streamer = ?
+             AND title_variant IS NOT NULL
+             AND title_variant != ''
+             AND yt_impressions_ctr IS NOT NULL""",
+        (streamer,),
+    ).fetchone()
+    if not baseline or baseline["cnt"] < min_samples:
+        return {}
+    avg_ctr_raw = baseline["avg_ctr"]
+    if not isinstance(avg_ctr_raw, (int, float)) or avg_ctr_raw <= 0:
+        return {}
+    avg_ctr = float(avg_ctr_raw)
+    rows = conn.execute(
+        """SELECT title_variant, AVG(yt_impressions_ctr) as variant_ctr, COUNT(*) as cnt
+           FROM clips
+           WHERE streamer = ?
+             AND title_variant IS NOT NULL
+             AND title_variant != ''
+             AND yt_impressions_ctr IS NOT NULL
+           GROUP BY title_variant""",
+        (streamer,),
+    ).fetchall()
+    multipliers: dict[str, float] = {}
+    for row in rows:
+        variant = row["title_variant"]
+        if not isinstance(variant, str) or row["cnt"] < min_samples:
+            continue
+        variant_ctr = row["variant_ctr"]
+        if not isinstance(variant_ctr, (int, float)) or variant_ctr <= 0:
+            continue
+        multipliers[variant] = max(0.5, min(2.0, float(variant_ctr) / avg_ctr))
+    return multipliers
+
+
+def get_game_performance(
+    conn: sqlite3.Connection,
+    streamer: str,
+    min_samples: int = 5,
+) -> dict[str, float]:
+    """Return per-game CTR multipliers relative to this streamer's baseline."""
+    baseline = conn.execute(
+        """SELECT AVG(yt_impressions_ctr) as avg_ctr, COUNT(*) as cnt
+           FROM clips
+           WHERE streamer = ?
+             AND game_name IS NOT NULL
+             AND game_name != ''
+             AND yt_impressions_ctr IS NOT NULL""",
+        (streamer,),
+    ).fetchone()
+    if not baseline or baseline["cnt"] < min_samples:
+        return {}
+    avg_ctr_raw = baseline["avg_ctr"]
+    if not isinstance(avg_ctr_raw, (int, float)) or avg_ctr_raw <= 0:
+        return {}
+    avg_ctr = float(avg_ctr_raw)
+    rows = conn.execute(
+        """SELECT game_name, AVG(yt_impressions_ctr) as game_ctr, COUNT(*) as cnt
+           FROM clips
+           WHERE streamer = ?
+             AND game_name IS NOT NULL
+             AND game_name != ''
+             AND yt_impressions_ctr IS NOT NULL
+           GROUP BY game_name""",
+        (streamer,),
+    ).fetchall()
+    multipliers: dict[str, float] = {}
+    for row in rows:
+        game_name = row["game_name"]
+        if not isinstance(game_name, str) or row["cnt"] < min_samples:
+            continue
+        game_ctr = row["game_ctr"]
+        if not isinstance(game_ctr, (int, float)) or game_ctr <= 0:
+            continue
+        multipliers[game_name] = max(0.5, min(2.0, float(game_ctr) / avg_ctr))
+    return multipliers
 
 
 def update_instagram_id(conn: sqlite3.Connection, clip_id: str, instagram_id: str):

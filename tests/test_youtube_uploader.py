@@ -8,7 +8,9 @@ from src.youtube_uploader import (
     _truncate_title,
     _uploads_playlist_cache,
     build_upload_title,
+    build_upload_title_with_variant,
     check_channel_for_duplicate,
+    get_title_variant_label,
     upload_short,
     validate_templates,
 )
@@ -178,6 +180,17 @@ class TestBuildUploadTitle:
         clip.game_name = "Apex"
         result = build_upload_title(clip, title_template="{title} SINGLE", title_templates=["{title} LIST"])
         assert result == "Cool Clip LIST"
+
+    def test_get_title_variant_label_for_templates(self):
+        clip = make_clip(clip_id="deterministic_id")
+        label = get_title_variant_label(clip, title_templates=["A", "B", "C"])
+        assert label.startswith("template_")
+
+    def test_build_upload_title_with_variant_returns_variant_label(self):
+        clip = make_clip(clip_id="deterministic_id", title="Clip")
+        title, variant = build_upload_title_with_variant(clip, title_templates=["{title} A", "{title} B"])
+        assert title in {"Clip A", "Clip B"}
+        assert variant in {"template_0", "template_1"}
 
 
 class TestUploadShortPrebuiltTitle:

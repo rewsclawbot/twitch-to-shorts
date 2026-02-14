@@ -7,7 +7,9 @@ from src.db import (
     clip_overlaps,
     finish_pipeline_run,
     get_clips_for_metrics,
+    get_game_performance,
     get_streamer_performance_multiplier,
+    get_title_variant_performance,
     get_todays_runs,
     increment_fail_count,
     insert_clip,
@@ -23,6 +25,12 @@ from src.db import (
     vod_overlaps,
 )
 from tests.conftest import make_clip
+
+
+class TestSchemaMigrations:
+    def test_clips_table_contains_new_feedback_columns(self, conn):
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(clips)").fetchall()}
+        assert {"title_variant", "game_name", "last_failed_at"} <= cols
 
 
 class TestInsertClip:
@@ -46,6 +54,37 @@ class TestInsertClip:
         assert row["title"] == "V2"
         assert row["view_count"] == 999
         assert row["youtube_id"] == "yt_updated"
+
+    def test_stores_game_name_and_title_variant(self, conn):
+        clip = make_clip(
+            clip_id="c_meta",
+            game_name="Valorant",
+            title_variant="template_2+optimized",
+            youtube_id="yt_meta",
+        )
+        insert_clip(conn, clip)
+        row = conn.execute("SELECT game_name, title_variant FROM clips WHERE clip_id = 'c_meta'").fetchone()
+        assert row["game_name"] == "Valorant"
+        assert row["title_variant"] == "template_2+optimized"
+
+    def test_upsert_preserves_existing_variant_when_new_value_empty(self, conn):
+        clip1 = make_clip(
+            clip_id="c_variant",
+            game_name="Fortnite",
+            title_variant="template_1",
+            youtube_id="yt_1",
+        )
+        insert_clip(conn, clip1)
+        clip2 = make_clip(
+            clip_id="c_variant",
+            game_name="",
+            title_variant="",
+            youtube_id="yt_2",
+        )
+        insert_clip(conn, clip2)
+        row = conn.execute("SELECT game_name, title_variant FROM clips WHERE clip_id = 'c_variant'").fetchone()
+        assert row["game_name"] == "Fortnite"
+        assert row["title_variant"] == "template_1"
 
 
 class TestRecordKnownClip:
@@ -91,6 +130,18 @@ class TestRecordKnownClip:
         row = conn.execute("SELECT youtube_id FROM clips WHERE clip_id = 'dup3'").fetchone()
         assert row["youtube_id"] == "yt_new"
 
+    def test_record_known_clip_stores_game_name_and_title_variant(self, conn):
+        clip = make_clip(
+            clip_id="dup_meta",
+            youtube_id="yt_dup",
+            game_name="Apex Legends",
+            title_variant="template_0",
+        )
+        record_known_clip(conn, clip)
+        row = conn.execute("SELECT game_name, title_variant FROM clips WHERE clip_id = 'dup_meta'").fetchone()
+        assert row["game_name"] == "Apex Legends"
+        assert row["title_variant"] == "template_0"
+
 
 class TestIncrementFailCount:
     def test_creates_row_if_not_exists(self, conn):
@@ -118,6 +169,23 @@ class TestIncrementFailCount:
         row = conn.execute("SELECT youtube_id, fail_count FROM clips WHERE clip_id = 'c_yt'").fetchone()
         assert row["youtube_id"] == "yt_abc"
         assert row["fail_count"] == 1
+
+    def test_sets_last_failed_at(self, conn):
+        clip = make_clip(clip_id="fail_ts")
+        increment_fail_count(conn, clip)
+        row = conn.execute("SELECT last_failed_at FROM clips WHERE clip_id = 'fail_ts'").fetchone()
+        assert row["last_failed_at"] is not None
+
+    def test_updates_last_failed_at_on_subsequent_failures(self, conn):
+        clip = make_clip(clip_id="fail_ts_update")
+        increment_fail_count(conn, clip)
+        old_ts = "2020-01-01T00:00:00+00:00"
+        conn.execute("UPDATE clips SET last_failed_at = ? WHERE clip_id = ?", (old_ts, clip.id))
+        conn.commit()
+        increment_fail_count(conn, clip)
+        row = conn.execute("SELECT fail_count, last_failed_at FROM clips WHERE clip_id = ?", (clip.id,)).fetchone()
+        assert row["fail_count"] == 2
+        assert row["last_failed_at"] != old_ts
 
 
 class TestRecentUploadCount:
@@ -472,6 +540,49 @@ class TestPerformanceMultiplier:
         conn.commit()
         mult = get_streamer_performance_multiplier(conn, "extreme")
         assert mult == 2.0
+
+
+class TestVariantAndGamePerformance:
+    def test_title_variant_performance_returns_empty_with_insufficient_data(self, conn):
+        for i in range(4):
+            conn.execute(
+                "INSERT INTO clips (clip_id, streamer, title_variant, yt_impressions_ctr) VALUES (?, ?, ?, ?)",
+                (f"tv_small_{i}", "s", "template_0", 0.04),
+            )
+        conn.commit()
+        assert get_title_variant_performance(conn, "s", min_samples=5) == {}
+
+    def test_title_variant_performance_computes_multipliers(self, conn):
+        for i in range(5):
+            conn.execute(
+                "INSERT INTO clips (clip_id, streamer, title_variant, yt_impressions_ctr) VALUES (?, ?, ?, ?)",
+                (f"tv_hi_{i}", "s", "template_0", 0.08),
+            )
+        for i in range(5):
+            conn.execute(
+                "INSERT INTO clips (clip_id, streamer, title_variant, yt_impressions_ctr) VALUES (?, ?, ?, ?)",
+                (f"tv_lo_{i}", "s", "template_1", 0.02),
+            )
+        conn.commit()
+        perf = get_title_variant_performance(conn, "s", min_samples=5)
+        assert perf["template_0"] == pytest.approx(1.6)
+        assert perf["template_1"] == pytest.approx(0.5)  # clamped
+
+    def test_game_performance_computes_multipliers(self, conn):
+        for i in range(5):
+            conn.execute(
+                "INSERT INTO clips (clip_id, streamer, game_name, yt_impressions_ctr) VALUES (?, ?, ?, ?)",
+                (f"gp_hi_{i}", "s", "Apex Legends", 0.09),
+            )
+        for i in range(5):
+            conn.execute(
+                "INSERT INTO clips (clip_id, streamer, game_name, yt_impressions_ctr) VALUES (?, ?, ?, ?)",
+                (f"gp_lo_{i}", "s", "Other Game", 0.01),
+            )
+        conn.commit()
+        perf = get_game_performance(conn, "s", min_samples=5)
+        assert perf["Apex Legends"] > 1.0
+        assert perf["Other Game"] == pytest.approx(0.5)  # clamped
 
 
 class TestUpdateYoutubeReachMetrics:

@@ -1,5 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from src.db import increment_fail_count, insert_clip
 from src.dedup import filter_new_clips
 from tests.conftest import make_clip
@@ -90,10 +92,41 @@ class TestFilterNewClips:
         # Simulate a prior failure — this inserts a DB row with created_at
         increment_fail_count(conn, clip)
 
-        # The same clip should still pass through filter_new_clips (fail_count < 3)
+        # The same clip should still pass through filter_new_clips (fail_count < 5)
         result = filter_new_clips(conn, [clip])
         assert len(result) == 1
         assert result[0].id == "retry_me"
+
+    def test_failed_clip_blocked_at_threshold_within_24h(self, conn):
+        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
+        clip = make_clip(
+            clip_id="fail_blocked",
+            streamer="streamer_x",
+            created_at=base_time.isoformat(),
+        )
+        conn.execute(
+            "INSERT INTO clips (clip_id, streamer, created_at, fail_count, last_failed_at) VALUES (?, ?, ?, ?, ?)",
+            (clip.id, clip.streamer, clip.created_at, 5, datetime.now(UTC).isoformat()),
+        )
+        conn.commit()
+        assert filter_new_clips(conn, [clip]) == []
+
+    def test_failed_clip_can_retry_after_24h(self, conn):
+        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
+        clip = make_clip(
+            clip_id="fail_retry_24h",
+            streamer="streamer_x",
+            created_at=base_time.isoformat(),
+        )
+        old_failure = (datetime.now(UTC) - timedelta(hours=25)).isoformat()
+        conn.execute(
+            "INSERT INTO clips (clip_id, streamer, created_at, fail_count, last_failed_at) VALUES (?, ?, ?, ?, ?)",
+            (clip.id, clip.streamer, clip.created_at, 5, old_failure),
+        )
+        conn.commit()
+        result = filter_new_clips(conn, [clip])
+        assert len(result) == 1
+        assert result[0].id == "fail_retry_24h"
 
     def test_different_streamer_same_timestamp_passes(self, conn):
         """Overlap detection is scoped to the same streamer."""
@@ -226,3 +259,68 @@ class TestFilterNewClips:
         )
         result = filter_new_clips(conn, [clip_a, clip_b])
         assert len(result) == 2
+
+    def test_vod_overlap_cluster_boost_applied_to_survivor(self, conn):
+        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
+        keeper = make_clip(
+            clip_id="cluster_keep",
+            streamer="streamer_x",
+            created_at=base_time.isoformat(),
+            vod_id="vod_cluster",
+            vod_offset=100,
+            duration=30,
+        )
+        keeper.score = 10.0
+        overlapped = make_clip(
+            clip_id="cluster_drop",
+            streamer="streamer_x",
+            created_at=(base_time + timedelta(seconds=10)).isoformat(),
+            vod_id="vod_cluster",
+            vod_offset=110,
+            duration=30,
+        )
+        overlapped.score = 9.0
+        other = make_clip(
+            clip_id="other",
+            streamer="streamer_x",
+            created_at=(base_time + timedelta(minutes=5)).isoformat(),
+            vod_id="vod_other",
+            vod_offset=100,
+            duration=30,
+        )
+        other.score = 7.0
+
+        result = filter_new_clips(conn, [keeper, overlapped, other])
+        assert [c.id for c in result] == ["cluster_keep", "other"]
+        assert result[0].score == pytest.approx(11.0)  # 10 * (1 + 0.1 * (2 - 1))
+        assert result[1].score == 7.0
+
+    def test_vod_overlap_cluster_boost_capped_at_2x(self, conn):
+        base_time = datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
+        keeper = make_clip(
+            clip_id="cluster_cap_keep",
+            streamer="streamer_x",
+            created_at=base_time.isoformat(),
+            vod_id="vod_cap",
+            vod_offset=100,
+            duration=30,
+        )
+        keeper.score = 10.0
+        overlaps = [
+            make_clip(
+                clip_id=f"cluster_cap_{i}",
+                streamer="streamer_x",
+                created_at=(base_time + timedelta(seconds=i)).isoformat(),
+                vod_id="vod_cap",
+                vod_offset=100 + i,
+                duration=30,
+            )
+            for i in range(1, 15)
+        ]
+        for c in overlaps:
+            c.score = 5.0
+
+        result = filter_new_clips(conn, [keeper, *overlaps])
+        assert len(result) == 1
+        assert result[0].id == "cluster_cap_keep"
+        assert result[0].score == pytest.approx(20.0)

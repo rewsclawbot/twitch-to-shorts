@@ -267,6 +267,7 @@ class TestTranscribeClip:
                 assert result is None
 
 
+@patch.dict("os.environ", {"CAPTION_BACKEND": "auto"}, clear=False)
 class TestGenerateCaptions:
     @patch("src.captioner.transcribe_clip", return_value=None)
     def test_transcription_failure_returns_none(self, mock_transcribe):

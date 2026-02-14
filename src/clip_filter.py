@@ -2,7 +2,7 @@ import logging
 import math
 from datetime import UTC, datetime
 
-from src.db import get_streamer_performance_multiplier
+from src.db import get_game_performance, get_streamer_performance_multiplier
 from src.models import Clip
 
 log = logging.getLogger(__name__)
@@ -65,6 +65,7 @@ def compute_score(
     duration_bonus_weight: float = 0.0,
     optimal_duration_min: int = 14,
     optimal_duration_max: int = 31,
+    game_multipliers: dict[str, float] | None = None,
 ) -> float:
     created = datetime.fromisoformat(clip.created_at)
     age_hours = max((datetime.now(UTC) - created).total_seconds() / 3600, 0.1)
@@ -79,6 +80,12 @@ def compute_score(
         score *= 1.0 + duration_bonus_weight * (bonus - 1.0)
     if title_quality_weight > 0:
         score *= 1.0 + title_quality_weight * _title_quality(clip.title)
+    if game_multipliers:
+        game_name = (clip.game_name or "").strip()
+        if game_name:
+            multiplier = game_multipliers.get(game_name)
+            if isinstance(multiplier, (int, float)) and multiplier > 0:
+                score *= float(multiplier)
     return score
 
 
@@ -105,6 +112,16 @@ def filter_and_rank(
         if not clips:
             return []
 
+    streamer_multiplier = 1.0
+    game_multipliers: dict[str, float] | None = None
+    if analytics_enabled:
+        streamer_multiplier = get_streamer_performance_multiplier(conn, streamer)
+        game_multipliers = get_game_performance(conn, streamer)
+        if streamer_multiplier != 1.0:
+            log.info("Applying performance multiplier %.2f for %s", streamer_multiplier, streamer)
+        if game_multipliers:
+            log.info("Applying %d game-specific multipliers for %s", len(game_multipliers), streamer)
+
     for c in clips:
         c.score = compute_score(
             c,
@@ -115,14 +132,10 @@ def filter_and_rank(
             duration_bonus_weight=duration_bonus_weight,
             optimal_duration_min=optimal_duration_min,
             optimal_duration_max=optimal_duration_max,
+            game_multipliers=game_multipliers,
         )
-
-    if analytics_enabled:
-        multiplier = get_streamer_performance_multiplier(conn, streamer)
-        if multiplier != 1.0:
-            log.info("Applying performance multiplier %.2f for %s", multiplier, streamer)
-            for c in clips:
-                c.score *= multiplier
+        if streamer_multiplier != 1.0:
+            c.score *= streamer_multiplier
 
     ranked = sorted(clips, key=lambda c: c.score, reverse=True)
     log.info("Ranked %d clips for %s (from %d fetched)", len(ranked), streamer, len(ranked))

@@ -185,9 +185,10 @@ class TestProcessSingleClip:
         assert result == "uploaded"
         assert yt_id == "yt_abc123"
         # Verify clip was inserted into DB
-        row = conn.execute("SELECT youtube_id FROM clips WHERE clip_id = ?", (clip.id,)).fetchone()
+        row = conn.execute("SELECT youtube_id, title_variant FROM clips WHERE clip_id = ?", (clip.id,)).fetchone()
         assert row is not None
         assert row["youtube_id"] == "yt_abc123"
+        assert row["title_variant"] == "original"
 
     def test_verify_upload_not_in_module(self, clip, yt_service, conn, cfg, streamer, log):
         """verify_upload() should not be imported in main.py (removed from hot path)."""
@@ -225,6 +226,9 @@ class TestProcessSingleClip:
         mock_dedup.assert_called_once_with(yt_service, "Optimized Title", cache_key="creds/test.json")
         _, kwargs = mock_upload.call_args
         assert kwargs["prebuilt_title"] == "Optimized Title"
+        row = conn.execute("SELECT title_variant FROM clips WHERE clip_id = ?", (clip.id,)).fetchone()
+        assert row is not None
+        assert row["title_variant"] == "original+optimized"
 
     @patch("main._cleanup_tmp_files")
     @patch("main.set_thumbnail", return_value=True)

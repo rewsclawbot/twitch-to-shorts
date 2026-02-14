@@ -1,5 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from src.clip_filter import compute_score, filter_and_rank
 from tests.conftest import make_clip
 
@@ -109,6 +111,12 @@ class TestComputeScore:
         optimal_with_bonus = compute_score(optimal, duration_bonus_weight=1.0)
         assert optimal_with_bonus > short_with_bonus
 
+    def test_game_multipliers_scale_score(self):
+        clip = make_clip(game_name="Valorant")
+        base = compute_score(clip)
+        boosted = compute_score(clip, game_multipliers={"Valorant": 1.5})
+        assert boosted == pytest.approx(base * 1.5)
+
 
 class TestFilterAndRank:
     def test_empty_input_returns_empty(self, conn):
@@ -157,3 +165,24 @@ class TestFilterAndRank:
         ]
         ranked = filter_and_rank(conn, clips, "s", duration_bonus_weight=1.0)
         assert ranked[0].id == "optimal"
+
+    def test_analytics_game_multipliers_affect_ranking(self, conn):
+        now = datetime.now(UTC).isoformat()
+        for i in range(5):
+            conn.execute(
+                "INSERT INTO clips (clip_id, streamer, game_name, yt_impressions_ctr, youtube_id, posted_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (f"g_hi_{i}", "s", "Apex Legends", 0.08, f"yt_hi_{i}", now),
+            )
+        for i in range(5):
+            conn.execute(
+                "INSERT INTO clips (clip_id, streamer, game_name, yt_impressions_ctr, youtube_id, posted_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (f"g_lo_{i}", "s", "Unknown Game", 0.01, f"yt_lo_{i}", now),
+            )
+        conn.commit()
+
+        clips = [
+            make_clip(clip_id="hi", streamer="s", game_name="Apex Legends", view_count=1000),
+            make_clip(clip_id="lo", streamer="s", game_name="Unknown Game", view_count=1000),
+        ]
+        ranked = filter_and_rank(conn, clips, "s", analytics_enabled=True)
+        assert ranked[0].id == "hi"

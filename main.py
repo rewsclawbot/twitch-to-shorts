@@ -46,6 +46,7 @@ from src.youtube_uploader import (  # noqa: E402
     build_upload_title,
     check_channel_for_duplicate,
     get_authenticated_service,
+    get_title_variant_label,
     set_thumbnail,
     upload_short,
 )
@@ -478,6 +479,7 @@ def _process_single_clip(clip, yt_service, conn, cfg, streamer, log, dry_run,
     planned_title = None
     if yt_service and not dry_run:
         planned_title = build_upload_title(clip, title_template, title_templates)
+        clip.title_variant = get_title_variant_label(clip, title_template, title_templates)
         if os.environ.get("TITLE_OPTIMIZER_ENABLED", "false").strip().lower() == "true":
             optimized_title = optimize_title(
                 planned_title,
@@ -493,6 +495,7 @@ def _process_single_clip(clip, yt_service, conn, cfg, streamer, log, dry_run,
                     optimized_title,
                 )
                 planned_title = optimized_title
+                clip.title_variant = f"{clip.title_variant}+optimized"
         cache_key = clip.channel_key or streamer.youtube_credentials or streamer.name
         existing_yt_id = check_channel_for_duplicate(yt_service, planned_title, cache_key=cache_key)
         if existing_yt_id:
