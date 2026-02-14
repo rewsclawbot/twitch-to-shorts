@@ -75,6 +75,9 @@ def compute_score(
     duration = max(clip.duration, 1)
     density = views / duration
     score = density + velocity * velocity_weight
+    # Research-backed dead zone: 30-50s clips underperform; apply a strong penalty.
+    if 30 <= duration <= 50:
+        score *= 0.5
     if duration_bonus_weight > 0:
         bonus = _duration_bonus(duration, optimal_duration_min, optimal_duration_max)
         score *= 1.0 + duration_bonus_weight * (bonus - 1.0)

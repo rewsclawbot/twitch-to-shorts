@@ -17,7 +17,7 @@ class TestComputeScore:
         score = compute_score(clip, velocity_weight=2.0)
         density = 1000 / 30
         velocity = 1000 / 1.0
-        expected = density + velocity * 2.0
+        expected = (density + velocity * 2.0) * 0.5  # 30-50s dead-zone penalty
         assert abs(score - expected) < 5  # small tolerance for sub-second timing
 
     def test_zero_duration_clamped_to_one(self):
@@ -110,6 +110,24 @@ class TestComputeScore:
         short_with_bonus = compute_score(very_short, duration_bonus_weight=1.0)
         optimal_with_bonus = compute_score(optimal, duration_bonus_weight=1.0)
         assert optimal_with_bonus > short_with_bonus
+
+    def test_mid_length_penalty_applies_between_30_and_50_seconds(self):
+        now = datetime.now(UTC)
+        penalized = make_clip(
+            clip_id="penalized",
+            view_count=1000,
+            duration=40,
+            created_at=(now - timedelta(hours=1)).isoformat(),
+        )
+        baseline = make_clip(
+            clip_id="baseline",
+            view_count=1000,
+            duration=20,
+            created_at=(now - timedelta(hours=1)).isoformat(),
+        )
+        penalized_score = compute_score(penalized)
+        baseline_score = compute_score(baseline)
+        assert penalized_score < baseline_score
 
     def test_game_multipliers_scale_score(self):
         clip = make_clip(game_name="Valorant")

@@ -41,8 +41,8 @@ pipeline:
   view_transform: linear
   title_quality_weight: 0.05
   duration_bonus_weight: 0.3
-  optimal_duration_min: 14
-  optimal_duration_max: 31
+  optimal_duration_min: 10
+  optimal_duration_max: 15
   tmp_dir: data/tmp
   db_path: data/clips.db
   log_file: data/pipeline.log

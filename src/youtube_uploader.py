@@ -171,6 +171,49 @@ def _sanitize_text(text: str) -> str:
     return re.sub(r"[\x00-\x1f<>\u200e\u200f\u202a-\u202e\u2066-\u2069]", "", text).strip()
 
 
+def _as_hashtag(text: str | None) -> str | None:
+    if not text:
+        return None
+    token = re.sub(r"[^a-zA-Z0-9]+", "", text.strip().lower())
+    if not token:
+        return None
+    return f"#{token}"
+
+
+def _build_default_description(clip: Clip) -> str:
+    game_name = clip.game_name or "gaming"
+    game_hashtag = _as_hashtag(clip.game_name)
+    streamer_hashtag = _as_hashtag(clip.streamer)
+    hashtags = ["#shorts", "#gaming", "#twitchclips"]
+    if game_hashtag:
+        hashtags.append(game_hashtag)
+    if streamer_hashtag:
+        hashtags.append(streamer_hashtag)
+    hashtags = _dedupe_tags(hashtags)
+    hashtag_line = " ".join(hashtags[:5])
+    return (
+        f"{game_name} highlight from {clip.streamer}: {clip.title}\n\n"
+        f"Gaming shorts, clutch moments, and funny stream clips.\n"
+        f"Credit: {clip.streamer} on Twitch.\n\n"
+        f"{hashtag_line}"
+    )
+
+
+def _ensure_description_hashtags(description: str, clip: Clip) -> str:
+    normalized = description or ""
+    lower = normalized.lower()
+    game_hashtag = _as_hashtag(clip.game_name)
+    required = ["#shorts", "#gaming"]
+    if game_hashtag:
+        required.append(game_hashtag)
+    missing = [tag for tag in required if tag not in lower]
+    if missing:
+        normalized = (normalized + "\n\n" if normalized else "") + " ".join(missing)
+    if "credit:" not in normalized.lower():
+        normalized += f"\nCredit: {clip.streamer} on Twitch."
+    return normalized
+
+
 
 def _render_template(template: str, clip: Clip) -> str:
     values = _TemplateDict(
@@ -298,13 +341,15 @@ def upload_short(
     if chosen_description:
         description = _sanitize_text(_render_template(chosen_description, clip))
     else:
-        description = f"Clip from {streamer_name}'s stream"
-    if "#Shorts" not in description:
-        description = (description + "\n\n#Shorts") if description else "#Shorts"
+        description = _build_default_description(clip)
+    description = _ensure_description_hashtags(description, clip)
 
-    tags = ["Shorts", streamer_name, "Twitch", "Gaming", "Highlights", "Clips"]
+    tags = ["#shorts", "Shorts", streamer_name, "Twitch", "Gaming", "Highlights", "Clips"]
     if game_name:
         tags.append(game_name)
+        game_hashtag = _as_hashtag(game_name)
+        if game_hashtag:
+            tags.append(game_hashtag)
     if extra_tags:
         tags.extend(extra_tags)
     tags = _limit_tag_length(_dedupe_tags(tags))

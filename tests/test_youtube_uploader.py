@@ -236,6 +236,45 @@ class TestUploadShortPrebuiltTitle:
 
         mock_build.assert_called_once()
 
+    @patch("src.youtube_uploader.MediaFileUpload")
+    def test_tags_always_include_shorts_hashtag(self, _mock_media):
+        service = _make_mock_service()
+        clip = make_clip(title="Clip", streamer="s1")
+        upload_short(service, "fake_video.mp4", clip)
+        body = service.videos().insert.call_args[1]["body"]
+        assert "#shorts" in body["snippet"]["tags"]
+
+    @patch("src.youtube_uploader.MediaFileUpload")
+    def test_game_hashtag_added_to_tags(self, _mock_media):
+        service = _make_mock_service()
+        clip = make_clip(title="Clip", streamer="s1")
+        clip.game_name = "Apex Legends"
+        upload_short(service, "fake_video.mp4", clip)
+        body = service.videos().insert.call_args[1]["body"]
+        assert "#apexlegends" in body["snippet"]["tags"]
+
+    @patch("src.youtube_uploader.MediaFileUpload")
+    def test_default_description_contains_seo_and_credit(self, _mock_media):
+        service = _make_mock_service()
+        clip = make_clip(title="Insane Clutch", streamer="TheBurntPeanut")
+        clip.game_name = "Valorant"
+        upload_short(service, "fake_video.mp4", clip)
+        description = service.videos().insert.call_args[1]["body"]["snippet"]["description"]
+        assert "Valorant highlight" in description
+        assert "Credit: TheBurntPeanut on Twitch." in description
+        assert "#shorts" in description.lower()
+
+    @patch("src.youtube_uploader.MediaFileUpload")
+    def test_template_description_gets_required_hashtags(self, _mock_media):
+        service = _make_mock_service()
+        clip = make_clip(title="Title", streamer="s1")
+        clip.game_name = "Counter-Strike 2"
+        upload_short(service, "fake_video.mp4", clip, description_template="Custom line")
+        description = service.videos().insert.call_args[1]["body"]["snippet"]["description"]
+        assert "#shorts" in description.lower()
+        assert "#gaming" in description.lower()
+        assert "#counterstrike2" in description.lower()
+
 
 class TestChannelDedup:
     def setup_method(self):
