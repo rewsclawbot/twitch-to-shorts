@@ -1,4 +1,4 @@
-"""Burned-in caption generation via Deepgram Nova-2 STT."""
+"""Burned-in caption generation via Deepgram or Whisper STT."""
 
 import logging
 import os
@@ -14,6 +14,12 @@ except ImportError:
     FileSource = None
     PrerecordedOptions = None
 
+try:
+    # Optional dependency: openai-whisper (`pip install openai-whisper`)
+    import whisper  # type: ignore[import-not-found]
+except ImportError:
+    whisper = None
+
 log = logging.getLogger(__name__)
 
 # Max audio file size (50 MB) to prevent OOM when reading into memory
@@ -22,6 +28,27 @@ _MAX_AUDIO_BYTES = 50_000_000
 # Retry config for Deepgram API
 _MAX_RETRIES = 3
 _RETRY_BACKOFF_BASE = 2  # seconds
+
+_ASS_HEADER = (
+    "[Script Info]\n"
+    "ScriptType: v4.00+\n"
+    "PlayResX: 1080\n"
+    "PlayResY: 1920\n"
+    "WrapStyle: 0\n"
+    "\n"
+    "[V4+ Styles]\n"
+    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+    "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+    "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+    "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+    "Style: Default,Arial,72,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
+    "1,0,0,0,100,100,0,0,1,4,0,2,20,20,400,1\n"
+    "\n"
+    "[Events]\n"
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+)
+
+_VALID_CAPTION_BACKENDS = {"auto", "deepgram", "whisper"}
 
 
 def transcribe_clip(video_path: str, tmp_dir: str, client=None):
@@ -128,6 +155,95 @@ def transcribe_clip(video_path: str, tmp_dir: str, client=None):
         safe_remove(audio_path, log=log)
 
 
+def _resolve_caption_backend() -> str:
+    """Resolve caption backend from environment with safe fallback."""
+    backend = os.environ.get("CAPTION_BACKEND", "auto").strip().lower()
+    if backend not in _VALID_CAPTION_BACKENDS:
+        log.warning("Invalid CAPTION_BACKEND=%r, defaulting to auto", backend)
+        return "auto"
+    return backend
+
+
+def _transcribe_whisper(audio_path: str) -> list[dict]:
+    """Transcribe an audio file with local Whisper and return segment timestamps."""
+    if whisper is None:
+        log.warning("openai-whisper not installed — skipping transcription")
+        return []
+
+    try:
+        model = whisper.load_model("base")
+        result = model.transcribe(audio_path, language="en")
+        raw_segments = result.get("segments") or []
+
+        segments = []
+        for segment in raw_segments:
+            text = str(segment.get("text", "")).strip()
+            if not text:
+                continue
+
+            start = float(segment.get("start", 0.0))
+            end = float(segment.get("end", start))
+            if end <= start:
+                continue
+
+            segments.append({"start": start, "end": end, "text": text})
+
+        return segments
+    except Exception as e:
+        log.warning("Whisper transcription failed for %s: %s", audio_path, e)
+        return []
+
+
+def _write_ass_file(lines: list[str], output_path: str) -> str:
+    """Write ASS subtitle header and dialogue lines to disk."""
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(_ASS_HEADER)
+        for line in lines:
+            f.write(line)
+    return output_path
+
+
+def _segments_to_ass(segments: list[dict], output_path: str) -> str:
+    """Convert Whisper segments into an ASS subtitle file."""
+    lines = []
+    for segment in segments:
+        text = str(segment.get("text", "")).strip()
+        if not text:
+            continue
+
+        start = float(segment.get("start", 0.0))
+        end = float(segment.get("end", start))
+        if end <= start:
+            continue
+
+        start_ass = _format_ass_time(start)
+        end_ass = _format_ass_time(end)
+        text = text.upper()
+        text = text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
+        lines.append(f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}\n")
+
+    return _write_ass_file(lines, output_path)
+
+
+def _offset_segments(segments: list[dict], silence_offset: float) -> list[dict]:
+    """Apply leading-silence offset to segment timestamps."""
+    if silence_offset <= 0:
+        return segments
+
+    adjusted = []
+    for segment in segments:
+        start = float(segment.get("start", 0.0))
+        end = float(segment.get("end", start))
+        text = str(segment.get("text", ""))
+        new_start = max(0, start - silence_offset)
+        new_end = max(0, end - silence_offset)
+        if new_end <= 0 or not text.strip():
+            continue
+        adjusted.append({"start": new_start, "end": new_end, "text": text})
+
+    return adjusted
+
+
 def _format_ass_time(seconds: float) -> str:
     """Convert seconds to ASS time format: H:MM:SS.cc (centiseconds).
 
@@ -208,25 +324,6 @@ def generate_ass_subtitles(words, output_path: str, silence_offset: float = 0.0)
 
     groups = _group_words(words)
 
-    header = (
-        "[Script Info]\n"
-        "ScriptType: v4.00+\n"
-        "PlayResX: 1080\n"
-        "PlayResY: 1920\n"
-        "WrapStyle: 0\n"
-        "\n"
-        "[V4+ Styles]\n"
-        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
-        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
-        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
-        "Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        "Style: Default,Arial,72,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
-        "1,0,0,0,100,100,0,0,1,4,0,2,20,20,400,1\n"
-        "\n"
-        "[Events]\n"
-        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
-    )
-
     lines = []
     for group in groups:
         start = _format_ass_time(group[0].start)
@@ -236,16 +333,9 @@ def generate_ass_subtitles(words, output_path: str, silence_offset: float = 0.0)
         text = text.upper()
         # Escape ASS special characters
         text = text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
-        lines.append(
-            f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}\n"
-        )
+        lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}\n")
 
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(header)
-        for line in lines:
-            f.write(line)
-
-    return output_path
+    return _write_ass_file(lines, output_path)
 
 
 def generate_captions(video_path: str, tmp_dir: str, silence_offset: float = 0.0) -> str | None:
@@ -257,13 +347,40 @@ def generate_captions(video_path: str, tmp_dir: str, silence_offset: float = 0.0
     clip_id = os.path.splitext(os.path.basename(video_path))[0]
     subtitle_path = os.path.join(tmp_dir, f"{clip_id}_captions.ass")
 
-    words = transcribe_clip(video_path, tmp_dir)
-    if not words:
+    backend = _resolve_caption_backend()
+
+    if backend in {"auto", "deepgram"}:
+        log.info("Using %s for captions", "deepgram")
+        words = transcribe_clip(video_path, tmp_dir)
+        if words:
+            try:
+                return generate_ass_subtitles(words, subtitle_path, silence_offset=silence_offset)
+            except Exception as e:
+                log.warning("ASS subtitle generation failed for %s: %s", clip_id, e)
+                safe_remove(subtitle_path, log=log)
+                return None
+
+        if backend == "deepgram":
+            return None
+
+    log.info("Using %s for captions", "whisper")
+    audio_path = os.path.join(tmp_dir, f"{clip_id}_audio_whisper.flac")
+    try:
+        extract_audio(video_path, audio_path)
+    except Exception as e:
+        log.warning("Audio extraction failed for %s: %s", clip_id, e)
+        safe_remove(audio_path, log=log)
         return None
 
     try:
-        return generate_ass_subtitles(words, subtitle_path, silence_offset=silence_offset)
+        segments = _transcribe_whisper(audio_path)
+        segments = _offset_segments(segments, silence_offset)
+        if not segments:
+            return None
+        return _segments_to_ass(segments, subtitle_path)
     except Exception as e:
         log.warning("ASS subtitle generation failed for %s: %s", clip_id, e)
         safe_remove(subtitle_path, log=log)
         return None
+    finally:
+        safe_remove(audio_path, log=log)
