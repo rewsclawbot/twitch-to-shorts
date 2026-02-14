@@ -43,9 +43,10 @@ def _should_optimize(clip_id: str) -> bool:
 
 
 def _rewrite_title_with_llm(clip_title: str, streamer_name: str, game_name: str) -> str | None:
-    """Rewrite a clip title with OpenAI, returning None on any failure."""
+    """Rewrite a clip title with an OpenAI-compatible LLM, returning None on failure."""
+    base_url = os.environ.get("LLM_BASE_URL")
     api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
+    if not base_url and not api_key:
         return None
     if OpenAI is None:
         log.warning("openai package not installed, skipping title rewrite")
@@ -69,11 +70,17 @@ def _rewrite_title_with_llm(clip_title: str, streamer_name: str, game_name: str)
         f"Game: {game_name}"
     )
 
-    client = OpenAI(api_key=api_key)
+    model_name = os.environ.get("LLM_MODEL_NAME", _LLM_MODEL)
+    client_kwargs: dict[str, str] = {"api_key": api_key or "not-needed"}
+    if base_url:
+        client_kwargs["base_url"] = base_url
+        log.debug("Using local LLM at %s with model %s", base_url, model_name)
+
+    client = OpenAI(**client_kwargs)
     for attempt in range(_LLM_MAX_ATTEMPTS):
         try:
             response = client.chat.completions.create(
-                model=_LLM_MODEL,
+                model=model_name,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
@@ -119,7 +126,7 @@ def optimize_title(
     if not _title_optimizer_enabled():
         return original_capped
 
-    if not os.environ.get("OPENAI_API_KEY"):
+    if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("LLM_BASE_URL"):
         return original_capped
 
     if not _should_optimize(clip_id):
@@ -133,4 +140,3 @@ def optimize_title(
     rewritten_capped = _truncate_title(rewritten, _MAX_TITLE_LEN)
     log.info("Title rewritten for %s: '%s' -> '%s'", clip_id, original, rewritten_capped)
     return rewritten_capped
-

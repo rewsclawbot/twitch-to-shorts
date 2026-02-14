@@ -33,6 +33,7 @@ from src.instagram_uploader import (  # noqa: E402
     upload_reel,
 )
 from src.models import FacecamConfig, PipelineConfig, StreamerConfig  # noqa: E402
+from src.title_optimizer import optimize_title  # noqa: E402
 from src.twitch_client import TwitchClient  # noqa: E402
 from src.video_processor import crop_to_vertical, detect_leading_silence, extract_thumbnail  # noqa: E402
 from src.youtube_analytics import fetch_video_metrics, get_analytics_service  # noqa: E402
@@ -425,6 +426,21 @@ def _process_single_clip(clip, yt_service, conn, cfg, streamer, log, dry_run,
     planned_title = None
     if yt_service and not dry_run:
         planned_title = build_upload_title(clip, title_template, title_templates)
+        if os.environ.get("TITLE_OPTIMIZER_ENABLED", "false").strip().lower() == "true":
+            optimized_title = optimize_title(
+                planned_title,
+                streamer.name,
+                clip.game_name or "",
+                clip.id,
+            )
+            if optimized_title != planned_title:
+                log.info(
+                    "Title optimized for %s: '%s' -> '%s'",
+                    clip.id,
+                    planned_title,
+                    optimized_title,
+                )
+                planned_title = optimized_title
         cache_key = clip.channel_key or streamer.youtube_credentials or streamer.name
         existing_yt_id = check_channel_for_duplicate(yt_service, planned_title, cache_key=cache_key)
         if existing_yt_id:

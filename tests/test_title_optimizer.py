@@ -92,6 +92,32 @@ def test_rewrite_title_with_llm_success():
     assert "YouTube Shorts" in kwargs["messages"][0]["content"]
 
 
+def test_rewrite_title_with_local_llm_success():
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock(message=MagicMock(content="LOCAL TITLE OK"))]
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = mock_response
+
+    with patch.dict(
+        "os.environ",
+        {
+            "LLM_BASE_URL": "http://localhost:1234/v1",
+            "LLM_MODEL_NAME": "qwen2.5-coder",
+        },
+        clear=True,
+    ):
+        with patch("src.title_optimizer.OpenAI", return_value=mock_client) as mock_openai:
+            result = _rewrite_title_with_llm("lol", "streamer", "Valorant")
+
+    assert result == "LOCAL TITLE OK"
+    mock_openai.assert_called_once_with(
+        api_key="not-needed",
+        base_url="http://localhost:1234/v1",
+    )
+    kwargs = mock_client.chat.completions.create.call_args.kwargs
+    assert kwargs["model"] == "qwen2.5-coder"
+
+
 def test_rewrite_title_with_llm_failure():
     mock_client = MagicMock()
     mock_client.chat.completions.create.side_effect = RuntimeError("api error")
@@ -139,3 +165,17 @@ def test_optimize_title_llm_failure_fallback():
     assert result == "Original Twitch Title"
     mock_rewrite.assert_called_once_with("Original Twitch Title", "streamer", "game")
 
+
+def test_optimize_title_local_llm_without_api_key():
+    with patch.dict(
+        "os.environ",
+        {
+            "TITLE_OPTIMIZER_ENABLED": "true",
+            "LLM_BASE_URL": "http://localhost:1234/v1",
+        },
+        clear=True,
+    ):
+        with patch("src.title_optimizer._rewrite_title_with_llm", return_value="LOCAL HOOK TITLE") as mock_rewrite:
+            result = optimize_title("Original Twitch Title", "streamer", "game", "clip_treatment")
+    assert result == "LOCAL HOOK TITLE"
+    mock_rewrite.assert_called_once_with("Original Twitch Title", "streamer", "game")

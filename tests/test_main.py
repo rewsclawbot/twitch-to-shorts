@@ -208,6 +208,24 @@ class TestProcessSingleClip:
         assert kwargs["prebuilt_title"] == "Prebuilt Title"
 
     @patch("main._cleanup_tmp_files")
+    @patch("main.upload_short", return_value="yt_abc123")
+    @patch("main.check_channel_for_duplicate", return_value=None)
+    @patch("main.optimize_title", return_value="Optimized Title")
+    @patch("main.build_upload_title", return_value="Prebuilt Title")
+    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    def test_title_optimizer_changes_prebuilt_title(self, mock_dl, mock_crop, mock_title, mock_optimize,
+                                                    mock_dedup, mock_upload, mock_clean,
+                                                    clip, yt_service, conn, cfg, streamer, log):
+        with patch.dict("os.environ", {"TITLE_OPTIMIZER_ENABLED": "true"}):
+            self._call(clip, yt_service, conn, cfg, streamer, log)
+
+        mock_optimize.assert_called_once_with("Prebuilt Title", "teststreamer", "Fortnite", "clip_1")
+        mock_dedup.assert_called_once_with(yt_service, "Optimized Title", cache_key="creds/test.json")
+        _, kwargs = mock_upload.call_args
+        assert kwargs["prebuilt_title"] == "Optimized Title"
+
+    @patch("main._cleanup_tmp_files")
     @patch("main.set_thumbnail", return_value=True)
     @patch("main.extract_thumbnail", return_value="/tmp/test/thumb.jpg")
     @patch("main.upload_short", return_value="yt_abc123")
