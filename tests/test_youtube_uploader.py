@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock, patch
 
+import requests
+
 from src.youtube_uploader import (
     _choose_template,
     _dedupe_tags,
@@ -11,6 +13,7 @@ from src.youtube_uploader import (
     build_upload_title_with_variant,
     check_channel_for_duplicate,
     get_title_variant_label,
+    optimize_description,
     upload_short,
     validate_templates,
 )
@@ -193,6 +196,60 @@ class TestBuildUploadTitle:
         assert variant in {"template_0", "template_1"}
 
 
+class TestOptimizeDescription:
+    def test_returns_none_without_llm_base_url(self):
+        with patch.dict("os.environ", {}, clear=True):
+            assert optimize_description("Clip Title", "Valorant", "streamer1") is None
+
+    @patch("src.youtube_uploader.requests.post")
+    def test_uses_local_llm_and_enforces_constraints(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Unreal swing! Valorant chaos with streamer1. Drop a follow #shorts #gaming",
+                    }
+                }
+            ]
+        }
+        mock_post.return_value = mock_response
+
+        with patch.dict(
+            "os.environ",
+            {"LLM_BASE_URL": "http://localhost:1234/v1", "LLM_MODEL_NAME": "qwen-local"},
+            clear=True,
+        ):
+            result = optimize_description("INSANE CLUTCH", "Valorant", "streamer1")
+
+        assert result is not None
+        assert len(result) <= 200
+        lowered = result.lower()
+        assert "#shorts" in lowered
+        assert "#gaming" in lowered
+        assert "#valorant" in lowered
+        assert "follow" in lowered
+
+        assert mock_post.call_count == 1
+        args, kwargs = mock_post.call_args
+        assert args[0] == "http://localhost:1234/v1/chat/completions"
+        assert kwargs["json"]["model"] == "qwen-local"
+        system_prompt = kwargs["json"]["messages"][0]["content"].lower()
+        assert "hook first line" in system_prompt
+        assert "under 200 characters" in system_prompt
+        assert "call to action" in system_prompt
+
+    @patch("src.youtube_uploader.time.sleep")
+    @patch("src.youtube_uploader.requests.post", side_effect=requests.RequestException("offline"))
+    def test_llm_failure_returns_none(self, mock_post, mock_sleep):
+        with patch.dict("os.environ", {"LLM_BASE_URL": "http://localhost:1234/v1"}, clear=True):
+            result = optimize_description("Clip Title", "Apex Legends", "streamer1")
+        assert result is None
+        assert mock_post.call_count == 2
+        mock_sleep.assert_called_once_with(2)
+
+
 class TestUploadShortPrebuiltTitle:
     @patch("src.youtube_uploader.MediaFileUpload")
     def test_prebuilt_title_used_directly(self, _mock_media):
@@ -274,6 +331,31 @@ class TestUploadShortPrebuiltTitle:
         assert "#shorts" in description.lower()
         assert "#gaming" in description.lower()
         assert "#counterstrike2" in description.lower()
+
+    @patch("src.youtube_uploader.MediaFileUpload")
+    @patch("src.youtube_uploader.optimize_description", return_value="Hook CTA #shorts #gaming #valorant")
+    def test_upload_uses_optimized_description_when_available(self, mock_opt_desc, _mock_media):
+        service = _make_mock_service()
+        clip = make_clip(title="Insane Clutch", streamer="s1")
+        clip.game_name = "Valorant"
+        upload_short(service, "fake_video.mp4", clip, description_template="Fallback text")
+        description = service.videos().insert.call_args[1]["body"]["snippet"]["description"]
+        assert description == "Hook CTA #shorts #gaming #valorant"
+        mock_opt_desc.assert_called_once()
+
+    @patch("src.youtube_uploader.MediaFileUpload")
+    @patch("src.youtube_uploader.optimize_description", return_value=None)
+    def test_upload_falls_back_to_template_when_optimizer_unavailable(self, mock_opt_desc, _mock_media):
+        service = _make_mock_service()
+        clip = make_clip(title="Title", streamer="s1")
+        clip.game_name = "Apex Legends"
+        upload_short(service, "fake_video.mp4", clip, description_template="Template base")
+        description = service.videos().insert.call_args[1]["body"]["snippet"]["description"]
+        assert "Template base" in description
+        assert "#shorts" in description.lower()
+        assert "#gaming" in description.lower()
+        assert "#apexlegends" in description.lower()
+        mock_opt_desc.assert_called_once()
 
 
 class TestChannelDedup:

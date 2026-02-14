@@ -9,6 +9,7 @@ import time
 from typing import Any
 
 import httplib2
+import requests
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -20,6 +21,12 @@ from googleapiclient.http import MediaFileUpload
 from src.models import Clip
 
 log = logging.getLogger(__name__)
+
+_LLM_MODEL = "gpt-4o-mini"
+_LLM_TIMEOUT_SECONDS = 10
+_LLM_MAX_ATTEMPTS = 2
+_LLM_RETRY_BACKOFF_SECONDS = 2
+_MAX_DESCRIPTION_LEN = 200
 
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
@@ -139,6 +146,16 @@ def _truncate_title(title: str, max_len: int = 100) -> str:
     return truncated.rstrip() + "..."
 
 
+def _truncate_description(text: str, max_len: int = _MAX_DESCRIPTION_LEN) -> str:
+    if len(text) <= max_len:
+        return text
+    truncated = text[:max_len]
+    last_space = truncated.rfind(" ")
+    if last_space > max_len // 2:
+        truncated = truncated[:last_space]
+    return truncated.rstrip()
+
+
 class _TemplateDict(dict):
     def __missing__(self, key: str) -> str:
         log.warning("Template references unknown key: {%s}", key)
@@ -197,6 +214,128 @@ def _build_default_description(clip: Clip) -> str:
         f"Credit: {clip.streamer} on Twitch.\n\n"
         f"{hashtag_line}"
     )
+
+
+def _description_has_cta(text: str) -> bool:
+    normalized = text.lower()
+    return any(verb in normalized for verb in ("follow", "subscribe", "comment", "like"))
+
+
+def _postprocess_optimized_description(text: str, game_name: str) -> str | None:
+    normalized = _sanitize_text(text).strip().strip("\"'")
+    normalized = re.sub(r"\s+", " ", normalized)
+    if not normalized:
+        return None
+
+    if not _description_has_cta(normalized):
+        normalized = f"{normalized} Follow for more."
+
+    required_tags = ["#shorts", "#gaming"]
+    game_hashtag = _as_hashtag(game_name)
+    if game_hashtag:
+        required_tags.append(game_hashtag)
+    required_tags = _dedupe_tags(required_tags)
+
+    lower = normalized.lower()
+    missing = [tag for tag in required_tags if tag not in lower]
+    if missing:
+        normalized = f"{normalized} {' '.join(missing)}".strip()
+
+    if len(normalized) <= _MAX_DESCRIPTION_LEN:
+        return normalized
+
+    tags_suffix = " ".join(required_tags)
+    # Keep hashtags present even if we have to shrink the prose.
+    core = normalized
+    for tag in required_tags:
+        core = re.sub(re.escape(tag), "", core, flags=re.IGNORECASE)
+    core = re.sub(r"\s+", " ", core).strip()
+    allowed_core_len = _MAX_DESCRIPTION_LEN - len(tags_suffix) - 1
+    if allowed_core_len <= 0:
+        return tags_suffix[:_MAX_DESCRIPTION_LEN]
+    core = _truncate_description(core, allowed_core_len)
+    return f"{core} {tags_suffix}".strip()
+
+
+def optimize_description(title: str, game_name: str, streamer_name: str) -> str | None:
+    """Generate an engaging Shorts description via local LLM and enforce platform constraints."""
+    base_url = os.environ.get("LLM_BASE_URL")
+    if not base_url:
+        return None
+
+    model_name = os.environ.get("LLM_MODEL_NAME", _LLM_MODEL)
+    endpoint = base_url.rstrip("/") + "/chat/completions"
+    game_hashtag = _as_hashtag(game_name) or "#gaming"
+    system_prompt = (
+        "You write YouTube Shorts descriptions for gaming clips.\n"
+        "Return a compact description with:\n"
+        "1) a hook first line,\n"
+        "2) short game context,\n"
+        "3) hashtags including #shorts #gaming and the game hashtag,\n"
+        "4) a clear call to action.\n"
+        "Keep the full output under 200 characters.\n"
+        "Output only description text."
+    )
+    user_prompt = (
+        f"Title: {title}\n"
+        f"Game: {game_name}\n"
+        f"Streamer: {streamer_name}\n"
+        f"Required game hashtag: {game_hashtag}"
+    )
+    payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.6,
+    }
+
+    headers = {"Content-Type": "application/json"}
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    for attempt in range(_LLM_MAX_ATTEMPTS):
+        try:
+            response = requests.post(
+                endpoint,
+                headers=headers,
+                json=payload,
+                timeout=_LLM_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            data = response.json()
+            choices = data.get("choices") if isinstance(data, dict) else None
+            if not isinstance(choices, list) or not choices:
+                log.warning("Description optimizer returned no choices")
+                return None
+            first_choice = choices[0]
+            if not isinstance(first_choice, dict):
+                return None
+            message = first_choice.get("message")
+            if not isinstance(message, dict):
+                return None
+            content = message.get("content")
+            if not isinstance(content, str) or not content.strip():
+                log.warning("Description optimizer returned empty content")
+                return None
+            return _postprocess_optimized_description(content, game_name)
+        except (requests.RequestException, ValueError) as err:
+            if attempt < _LLM_MAX_ATTEMPTS - 1:
+                log.warning(
+                    "Description optimizer attempt %d/%d failed: %s (retrying in %ds)",
+                    attempt + 1,
+                    _LLM_MAX_ATTEMPTS,
+                    err,
+                    _LLM_RETRY_BACKOFF_SECONDS,
+                )
+                time.sleep(_LLM_RETRY_BACKOFF_SECONDS)
+                continue
+            log.warning("Description optimizer failed: %s", err)
+            return None
+
+    return None
 
 
 def _ensure_description_hashtags(description: str, clip: Clip) -> str:
@@ -339,10 +478,13 @@ def upload_short(
 
     chosen_description = _choose_template(clip.id, description_templates) or description_template
     if chosen_description:
-        description = _sanitize_text(_render_template(chosen_description, clip))
+        fallback_description = _sanitize_text(_render_template(chosen_description, clip))
     else:
-        description = _build_default_description(clip)
-    description = _ensure_description_hashtags(description, clip)
+        fallback_description = _build_default_description(clip)
+
+    description = optimize_description(full_title, game_name, streamer_name)
+    if not description:
+        description = _ensure_description_hashtags(fallback_description, clip)
 
     tags = ["#shorts", "Shorts", streamer_name, "Twitch", "Gaming", "Highlights", "Clips"]
     if game_name:
