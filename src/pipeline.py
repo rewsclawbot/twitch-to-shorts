@@ -37,9 +37,9 @@ from src.video_processor import (  # noqa: E402
     burn_context_overlay,
     crop_to_vertical,
     detect_leading_silence,
-    detect_visual_dead_frames,
     extract_thumbnail,
     find_peak_action_timestamp,
+    trim_to_optimal_length,
 )
 from src.youtube_analytics import fetch_video_metrics, get_analytics_service  # noqa: E402
 from src.youtube_reporting import fetch_reach_metrics, get_reporting_service  # noqa: E402
@@ -601,13 +601,33 @@ def _process_single_clip_with_context(clip, context: ProcessingContext):
         increment_fail_count(conn, clip)
         return "downloaded_fail", None
 
+    processing_video_path = video_path
+    smart_trim_path = None
+    smart_trim_enabled = bool(getattr(cfg, "smart_trim", False))
+    smart_trim_target_duration = int(getattr(cfg, "smart_trim_target_duration", 15))
+    source_duration = float(getattr(clip, "duration", 0) or 0)
+    if smart_trim_enabled and smart_trim_target_duration > 0 and source_duration > smart_trim_target_duration:
+        base_name = os.path.splitext(os.path.basename(video_path))[0]
+        trimmed_output = os.path.join(cfg.tmp_dir, f"{base_name}_smarttrim.mp4")
+        trimmed_path = trim_to_optimal_length(
+            video_path,
+            trimmed_output,
+            target_duration=smart_trim_target_duration,
+        )
+        if trimmed_path:
+            processing_video_path = trimmed_path
+            if os.path.abspath(trimmed_path) != os.path.abspath(video_path):
+                smart_trim_path = trimmed_path
+        else:
+            log.warning("Smart trim failed for %s; falling back to original clip", clip.id)
+
     # Detect leading silence once — used by both captioner and cropper
-    silence_offset = detect_leading_silence(video_path)
+    silence_offset = detect_leading_silence(processing_video_path)
 
     subtitle_path = None
     if captions_enabled:
         from src.captioner import generate_captions
-        subtitle_path = generate_captions(video_path, cfg.tmp_dir, silence_offset=silence_offset)
+        subtitle_path = generate_captions(processing_video_path, cfg.tmp_dir, silence_offset=silence_offset)
         if subtitle_path:
             log.info("Generated captions for %s", clip.id)
 
@@ -616,7 +636,7 @@ def _process_single_clip_with_context(clip, context: ProcessingContext):
     context_overlay_enabled = bool(getattr(cfg, "context_overlay", True))
 
     vertical_path = crop_to_vertical(
-        video_path, cfg.tmp_dir, cfg.max_clip_duration_seconds,
+        processing_video_path, cfg.tmp_dir, cfg.max_clip_duration_seconds,
         facecam=streamer.facecam,
         facecam_mode=streamer.facecam_mode,
         subtitle_path=subtitle_path,
@@ -627,7 +647,7 @@ def _process_single_clip_with_context(clip, context: ProcessingContext):
     thumbnail_path = None
     if not vertical_path:
         increment_fail_count(conn, clip)
-        _cleanup_tmp_files(video_path, subtitle_path)
+        _cleanup_tmp_files(video_path, smart_trim_path, subtitle_path)
         return "processed_fail", None
 
     if peak_action_trim_enabled:
@@ -644,7 +664,7 @@ def _process_single_clip_with_context(clip, context: ProcessingContext):
 
     if dry_run:
         log.info("[DRY RUN] Would upload clip %s: %s", clip.id, clip.title)
-        _cleanup_tmp_files(video_path, vertical_path, subtitle_path)
+        _cleanup_tmp_files(video_path, smart_trim_path, vertical_path, subtitle_path)
         return "dry_run", None
 
     try:
@@ -659,20 +679,20 @@ def _process_single_clip_with_context(clip, context: ProcessingContext):
                                   prebuilt_title=planned_title)
     except QuotaExhaustedError:
         log.warning("YouTube quota exhausted — stopping uploads for this run")
-        _cleanup_tmp_files(video_path, vertical_path, thumbnail_path, subtitle_path)
+        _cleanup_tmp_files(video_path, smart_trim_path, vertical_path, thumbnail_path, subtitle_path)
         return "quota_exhausted", None
     except ForbiddenError:
         increment_fail_count(conn, clip)
-        _cleanup_tmp_files(video_path, vertical_path, thumbnail_path, subtitle_path)
+        _cleanup_tmp_files(video_path, smart_trim_path, vertical_path, thumbnail_path, subtitle_path)
         return "forbidden", None
     except AuthenticationError:
         log.error("Authentication failed — aborting uploads for this streamer")
-        _cleanup_tmp_files(video_path, vertical_path, thumbnail_path, subtitle_path)
+        _cleanup_tmp_files(video_path, smart_trim_path, vertical_path, thumbnail_path, subtitle_path)
         return "auth_error", None
 
     if not youtube_id:
         increment_fail_count(conn, clip)
-        _cleanup_tmp_files(video_path, vertical_path, thumbnail_path, subtitle_path)
+        _cleanup_tmp_files(video_path, smart_trim_path, vertical_path, thumbnail_path, subtitle_path)
         return "upload_fail", None
 
     # Record to DB immediately after upload succeeds — before verify/thumbnail.
@@ -715,7 +735,7 @@ def _process_single_clip_with_context(clip, context: ProcessingContext):
             thumbnail_path = enhance_thumbnail(thumbnail_path, clip.title)
             set_thumbnail(yt_service, youtube_id, thumbnail_path)
 
-    _cleanup_tmp_files(video_path, vertical_path, thumbnail_path, subtitle_path)
+    _cleanup_tmp_files(video_path, smart_trim_path, vertical_path, thumbnail_path, subtitle_path)
     return "uploaded", youtube_id
 
 

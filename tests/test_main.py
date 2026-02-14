@@ -248,6 +248,115 @@ class TestProcessSingleClip:
         assert yt_id is None
         mock_overlay.assert_not_called()
 
+    @patch("src.pipeline.detect_leading_silence", return_value=0.0)
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.trim_to_optimal_length", return_value="/tmp/test/clip_1_smarttrim.mp4")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
+    def test_smart_trim_applied_before_crop_for_long_clips(
+        self,
+        mock_dl,
+        mock_trim,
+        mock_crop,
+        mock_clean,
+        mock_silence,
+        clip,
+        yt_service,
+        conn,
+        cfg,
+        streamer,
+        log,
+    ):
+        clip.duration = 42
+        cfg.smart_trim = True
+        cfg.smart_trim_target_duration = 15
+        cfg.peak_action_trim = False
+        cfg.loop_optimize = False
+        cfg.context_overlay = False
+
+        result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log, dry_run=True)
+        assert result == "dry_run"
+        assert yt_id is None
+
+        mock_trim.assert_called_once_with(
+            "/tmp/test/clip_1.mp4",
+            "/tmp/test/clip_1_smarttrim.mp4",
+            target_duration=15,
+        )
+        mock_silence.assert_called_once_with("/tmp/test/clip_1_smarttrim.mp4")
+        crop_args = mock_crop.call_args[0]
+        assert crop_args[0] == "/tmp/test/clip_1_smarttrim.mp4"
+
+    @patch("src.pipeline.detect_leading_silence", return_value=0.0)
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.trim_to_optimal_length", return_value=None)
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
+    def test_smart_trim_failure_falls_back_to_original_clip(
+        self,
+        mock_dl,
+        mock_trim,
+        mock_crop,
+        mock_clean,
+        mock_silence,
+        clip,
+        yt_service,
+        conn,
+        cfg,
+        streamer,
+        log,
+    ):
+        clip.duration = 42
+        cfg.smart_trim = True
+        cfg.smart_trim_target_duration = 15
+        cfg.peak_action_trim = False
+        cfg.loop_optimize = False
+        cfg.context_overlay = False
+
+        result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log, dry_run=True)
+        assert result == "dry_run"
+        assert yt_id is None
+
+        mock_trim.assert_called_once()
+        mock_silence.assert_called_once_with("/tmp/test/clip_1.mp4")
+        crop_args = mock_crop.call_args[0]
+        assert crop_args[0] == "/tmp/test/clip_1.mp4"
+
+    @patch("src.pipeline.detect_leading_silence", return_value=0.0)
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.trim_to_optimal_length")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
+    def test_smart_trim_skipped_when_clip_not_longer_than_target(
+        self,
+        mock_dl,
+        mock_trim,
+        mock_crop,
+        mock_clean,
+        mock_silence,
+        clip,
+        yt_service,
+        conn,
+        cfg,
+        streamer,
+        log,
+    ):
+        clip.duration = 15
+        cfg.smart_trim = True
+        cfg.smart_trim_target_duration = 15
+        cfg.peak_action_trim = False
+        cfg.loop_optimize = False
+        cfg.context_overlay = False
+
+        result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log, dry_run=True)
+        assert result == "dry_run"
+        assert yt_id is None
+
+        mock_trim.assert_not_called()
+        mock_silence.assert_called_once_with("/tmp/test/clip_1.mp4")
+        crop_args = mock_crop.call_args[0]
+        assert crop_args[0] == "/tmp/test/clip_1.mp4"
+
     @patch("src.pipeline.check_channel_for_duplicate", return_value="existing_yt_id")
     @patch("src.pipeline.build_upload_title", return_value="Test Title")
     def test_duplicate_detected(self, mock_title, mock_dedup,

@@ -396,6 +396,106 @@ def find_peak_action_timestamp(
     return timestamps[best_idx] + center_offset
 
 
+def trim_to_optimal_length(video_path: str, output_path: str, target_duration: int = 15) -> str | None:
+    """Trim a clip to the densest activity window based on YDIF heatmap sampling.
+
+    Returns output_path on success, original path if no trim is needed, or None on failure.
+    """
+    if target_duration <= 0:
+        log.warning("Smart trim target_duration must be > 0, got %s", target_duration)
+        return None
+
+    if not os.path.exists(video_path):
+        return None
+
+    duration = _get_duration(video_path)
+    if not duration or duration <= 0:
+        return None
+
+    target = float(target_duration)
+    if duration <= target + 0.01:
+        return video_path
+
+    sample_interval = 0.5
+    timestamps: list[float] = []
+    max_ts = max(duration - 0.1, 0.0)
+    ts = 0.0
+    while ts < duration:
+        timestamps.append(min(ts, max_ts))
+        ts += sample_interval
+    if not timestamps:
+        return None
+
+    scores = _batch_sample_ydif(video_path, timestamps)
+    if not scores:
+        return None
+
+    window_size = max(int(round(target / sample_interval)), 1)
+    if len(scores) <= window_size:
+        best_idx = 0
+        best_total = sum(scores)
+    else:
+        running_total = sum(scores[:window_size])
+        best_total = running_total
+        best_idx = 0
+        for i in range(window_size, len(scores)):
+            running_total += scores[i] - scores[i - window_size]
+            start_idx = i - window_size + 1
+            if running_total > best_total:
+                best_total = running_total
+                best_idx = start_idx
+
+    max_start = max(duration - target, 0.0)
+    trim_start = max(0.0, min(timestamps[best_idx], max_start))
+
+    tmp_output = output_path + ".tmp"
+    cmd = [
+        FFMPEG,
+        "-y",
+        "-ss", f"{trim_start:.2f}",
+        "-i", video_path,
+        "-t", f"{target:.2f}",
+        "-map", "0:v:0",
+        "-map", "0:a?",
+        "-c:v", "libx264",
+        "-crf", "20",
+        "-preset", "fast",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-movflags", "+faststart",
+        tmp_output,
+    ]
+
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=300)
+    except subprocess.CalledProcessError as e:
+        log.warning(
+            "Smart trim ffmpeg failed for %s: %s",
+            video_path,
+            (e.stderr or "")[-500:],
+        )
+        safe_remove(tmp_output)
+        return None
+    except Exception as e:
+        log.warning("Smart trim failed for %s: %s", video_path, e)
+        safe_remove(tmp_output)
+        return None
+
+    if not os.path.exists(tmp_output) or os.path.getsize(tmp_output) == 0:
+        safe_remove(tmp_output)
+        return None
+
+    os.replace(tmp_output, output_path)
+    log.info(
+        "Smart trimmed %s to %.2fs window starting at %.2fs (activity score %.2f)",
+        os.path.basename(video_path),
+        target,
+        trim_start,
+        best_total,
+    )
+    return output_path
+
+
 def check_loop_compatibility(
     video_path: str,
     ydif_threshold: float = 8.0,

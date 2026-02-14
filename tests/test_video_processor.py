@@ -19,6 +19,7 @@ from src.video_processor import (
     detect_visual_dead_frames,
     extract_thumbnail,
     find_peak_action_timestamp,
+    trim_to_optimal_length,
 )
 
 
@@ -765,6 +766,73 @@ class TestFindPeakActionTimestamp:
         # When duration is None, missing file triggers early return
         result = find_peak_action_timestamp("missing.mp4", start_offset=1.5)
         assert result == 1.5
+
+
+class TestTrimToOptimalLength:
+    @patch("src.video_processor.os.replace")
+    @patch("src.video_processor.os.path.getsize", return_value=1024)
+    @patch("src.video_processor.os.path.exists")
+    @patch("src.video_processor.subprocess.run")
+    @patch("src.video_processor._batch_sample_ydif")
+    @patch("src.video_processor._get_duration", return_value=30.0)
+    def test_selects_densest_target_window(
+        self,
+        mock_duration,
+        mock_batch,
+        mock_run,
+        mock_exists,
+        mock_getsize,
+        mock_replace,
+    ):
+        # exists checks: input path, tmp output path
+        mock_exists.side_effect = [True, True]
+        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        scores = [0.1] * 60
+        for i in range(20, 50):
+            scores[i] = 8.0
+        mock_batch.return_value = scores
+
+        output = trim_to_optimal_length("input.mp4", "trimmed.mp4", target_duration=15)
+
+        assert output == "trimmed.mp4"
+        cmd = mock_run.call_args[0][0]
+        assert isinstance(cmd, list)
+        assert "-ss" in cmd and cmd[cmd.index("-ss") + 1] == "10.00"
+        assert "-t" in cmd and cmd[cmd.index("-t") + 1] == "15.00"
+        assert "input.mp4" in cmd
+
+    @patch("src.video_processor.subprocess.run")
+    @patch("src.video_processor._batch_sample_ydif")
+    @patch("src.video_processor._get_duration", return_value=12.0)
+    @patch("src.video_processor.os.path.exists", return_value=True)
+    def test_short_clip_returns_original_path(
+        self,
+        mock_exists,
+        mock_duration,
+        mock_batch,
+        mock_run,
+    ):
+        output = trim_to_optimal_length("input.mp4", "trimmed.mp4", target_duration=15)
+        assert output == "input.mp4"
+        mock_batch.assert_not_called()
+        mock_run.assert_not_called()
+
+    @patch("src.video_processor.safe_remove")
+    @patch("src.video_processor.subprocess.run", side_effect=Exception("ffmpeg crash"))
+    @patch("src.video_processor._batch_sample_ydif", return_value=[1.0] * 60)
+    @patch("src.video_processor._get_duration", return_value=30.0)
+    @patch("src.video_processor.os.path.exists", return_value=True)
+    def test_failure_returns_none_and_cleans_tmp(
+        self,
+        mock_exists,
+        mock_duration,
+        mock_batch,
+        mock_run,
+        mock_remove,
+    ):
+        output = trim_to_optimal_length("input.mp4", "trimmed.mp4", target_duration=15)
+        assert output is None
+        mock_remove.assert_called_once_with("trimmed.mp4.tmp")
 
 
 class TestLoopCompatibility:

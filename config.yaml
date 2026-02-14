@@ -101,6 +101,8 @@ pipeline:
   peak_action_trim: true
   loop_optimize: true
   context_overlay: true
+  smart_trim: false
+  smart_trim_target_duration: 15
   force_upload: false
   posting_schedule:
     enabled: true

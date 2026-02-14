@@ -79,6 +79,8 @@ class PipelineConfig:
     peak_action_trim: bool = True
     loop_optimize: bool = True
     context_overlay: bool = True
+    smart_trim: bool = False
+    smart_trim_target_duration: int = 15
     force_upload: bool = False
     posting_schedule: dict | None = None
 
@@ -96,6 +98,7 @@ class PipelineConfig:
             ("analytics_min_age_hours", self.analytics_min_age_hours),
             ("analytics_sync_interval_hours", self.analytics_sync_interval_hours),
             ("analytics_max_videos_per_run", self.analytics_max_videos_per_run),
+            ("smart_trim_target_duration", self.smart_trim_target_duration),
         ]
         for name, value in int_fields:
             if not isinstance(value, int):
@@ -127,6 +130,7 @@ class PipelineConfig:
         self.peak_action_trim = bool(self.peak_action_trim)
         self.loop_optimize = bool(self.loop_optimize)
         self.context_overlay = bool(self.context_overlay)
+        self.smart_trim = bool(self.smart_trim)
         self.force_upload = bool(self.force_upload)
 
         if self.age_decay not in ("linear", "log"):
@@ -137,6 +141,11 @@ class PipelineConfig:
             errors.append(
                 "optimal_duration_min must be <= optimal_duration_max, got "
                 f"{self.optimal_duration_min} > {self.optimal_duration_max}"
+            )
+        if self.smart_trim_target_duration <= 0:
+            errors.append(
+                "smart_trim_target_duration must be > 0, got "
+                f"{self.smart_trim_target_duration}"
             )
 
         if errors:
