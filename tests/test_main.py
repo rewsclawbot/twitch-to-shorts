@@ -187,6 +187,67 @@ class TestProcessSingleClip:
         assert kwargs["peak_action_trim"] is False
         assert kwargs["loop_optimize"] is False
 
+    @patch("src.pipeline.burn_context_overlay", return_value=True)
+    @patch("src.pipeline.detect_leading_silence", return_value=0.0)
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
+    def test_context_overlay_enabled(
+        self,
+        mock_dl,
+        mock_crop,
+        mock_clean,
+        mock_silence,
+        mock_overlay,
+        clip,
+        yt_service,
+        conn,
+        cfg,
+        streamer,
+        log,
+    ):
+        cfg.peak_action_trim = False
+        cfg.loop_optimize = False
+        cfg.context_overlay = True
+
+        result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log, dry_run=True)
+        assert result == "dry_run"
+        assert yt_id is None
+        mock_overlay.assert_called_once_with(
+            "/tmp/test/clip_1_vertical.mp4",
+            "/tmp/test/clip_1_vertical.mp4",
+            "Fortnite",
+            "Amazing Play",
+        )
+
+    @patch("src.pipeline.burn_context_overlay")
+    @patch("src.pipeline.detect_leading_silence", return_value=0.0)
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
+    def test_context_overlay_disabled(
+        self,
+        mock_dl,
+        mock_crop,
+        mock_clean,
+        mock_silence,
+        mock_overlay,
+        clip,
+        yt_service,
+        conn,
+        cfg,
+        streamer,
+        log,
+    ):
+        cfg.peak_action_trim = False
+        cfg.loop_optimize = False
+        cfg.context_overlay = False
+
+        result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log, dry_run=True)
+        assert result == "dry_run"
+        assert yt_id is None
+        mock_overlay.assert_not_called()
+
     @patch("src.pipeline.check_channel_for_duplicate", return_value="existing_yt_id")
     @patch("src.pipeline.build_upload_title", return_value="Test Title")
     def test_duplicate_detected(self, mock_title, mock_dedup,
@@ -302,13 +363,24 @@ class TestProcessSingleClip:
     @patch("src.pipeline.set_thumbnail", return_value=True)
     @patch("src.pipeline.extract_thumbnail", return_value="/tmp/test/thumb.jpg")
     @patch("src.pipeline.upload_short", return_value="yt_abc123")
+    @patch("src.pipeline.burn_context_overlay", return_value=True)
+    @patch("src.pipeline.detect_leading_silence", return_value=0.0)
     @patch("src.pipeline.check_channel_for_duplicate", return_value=None)
     @patch("src.pipeline.build_upload_title", return_value="Test Title")
     @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
     @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
     def test_thumbnail_extraction_on_success(self, mock_dl, mock_crop, mock_title, mock_dedup,
-                                              mock_upload, mock_thumb, mock_set_thumb,
-                                              mock_clean, clip, yt_service, conn, cfg, streamer, log):
+                                              mock_silence, mock_overlay, mock_upload, mock_thumb,
+                                              mock_set_thumb, mock_clean,
+                                              clip, yt_service, conn, cfg, streamer, log):
+        cfg.context_overlay = True
+
+        def _extract_side_effect(*args, **kwargs):
+            assert mock_overlay.called
+            return "/tmp/test/thumb.jpg"
+
+        mock_thumb.side_effect = _extract_side_effect
+
         result, _yt_id = _process_single_clip(
             clip, yt_service, conn, cfg, streamer, log, False,
             title_template=None, title_templates=None,
@@ -318,6 +390,12 @@ class TestProcessSingleClip:
         )
         assert result == "uploaded"
         mock_thumb.assert_called_once()
+        mock_overlay.assert_called_once_with(
+            "/tmp/test/clip_1_vertical.mp4",
+            "/tmp/test/clip_1_vertical.mp4",
+            "Fortnite",
+            "Amazing Play",
+        )
         mock_set_thumb.assert_called_once_with(yt_service, "yt_abc123", "/tmp/test/thumb.jpg")
 
 

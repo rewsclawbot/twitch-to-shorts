@@ -135,3 +135,25 @@ class TestVideoProcessorSubprocessSafety:
         assert commands, "Expected at least one Popen invocation"
         assert all(isinstance(cmd, list) for cmd in commands), "Popen must use list args"
         assert any(filename in cmd for cmd in commands)
+
+    @pytest.mark.parametrize("filename", ADVERSARIAL_FILENAMES)
+    @patch("src.video_processor._find_context_fontfile", return_value=None)
+    @patch("src.video_processor.os.replace")
+    @patch("src.video_processor.os.path.getsize", return_value=1000)
+    @patch("src.video_processor.os.path.exists")
+    @patch("src.video_processor.subprocess.run")
+    def test_burn_context_overlay_list_args(
+        self, mock_run, mock_exists, mock_getsize, mock_replace, mock_font, filename
+    ):
+        from src.video_processor import burn_context_overlay
+
+        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        # exists checks: input path, tmp output path
+        mock_exists.side_effect = [True, True]
+
+        burn_context_overlay(filename, "/tmp/contexted.mp4", "Valorant", "INSANE 1v5 clutch")
+
+        call_args = mock_run.call_args
+        cmd = call_args[0][0]
+        assert isinstance(cmd, list), "subprocess must use list args"
+        assert filename in cmd

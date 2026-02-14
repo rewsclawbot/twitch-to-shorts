@@ -34,6 +34,7 @@ from src.title_optimizer import optimize_title  # noqa: E402
 from src.twitch_client import TwitchClient  # noqa: E402
 from src.video_processor import (  # noqa: E402
     apply_loop_crossfade,
+    burn_context_overlay,
     crop_to_vertical,
     detect_leading_silence,
     detect_visual_dead_frames,
@@ -612,6 +613,7 @@ def _process_single_clip_with_context(clip, context: ProcessingContext):
 
     peak_action_trim_enabled = bool(getattr(cfg, "peak_action_trim", True))
     loop_optimize_enabled = bool(getattr(cfg, "loop_optimize", True))
+    context_overlay_enabled = bool(getattr(cfg, "context_overlay", True))
 
     vertical_path = crop_to_vertical(
         video_path, cfg.tmp_dir, cfg.max_clip_duration_seconds,
@@ -635,6 +637,10 @@ def _process_single_clip_with_context(clip, context: ProcessingContext):
     if loop_optimize_enabled:
         if apply_loop_crossfade(vertical_path, crossfade_duration=0.3):
             log.info("Applied 0.3s loop crossfade for %s", clip.id)
+
+    if context_overlay_enabled:
+        if burn_context_overlay(vertical_path, vertical_path, clip.game_name or "", clip.title):
+            log.info("Applied context overlay for %s", clip.id)
 
     if dry_run:
         log.info("[DRY RUN] Would upload clip %s: %s", clip.id, clip.title)

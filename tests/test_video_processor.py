@@ -12,6 +12,7 @@ from src.video_processor import (
     _escape_subtitle_path,
     _probe_video_info,
     _run_ffmpeg,
+    burn_context_overlay,
     check_loop_compatibility,
     crop_to_vertical,
     detect_leading_silence,
@@ -311,6 +312,75 @@ class TestExtractThumbnailDurationParam:
         result = extract_thumbnail("test.mp4", "/tmp/thumbs", duration=0)
         assert result is None
         mock_batch.assert_not_called()
+
+
+class TestBurnContextOverlay:
+    @patch("src.video_processor._find_context_fontfile", return_value=None)
+    @patch("src.video_processor.os.replace")
+    @patch("src.video_processor.os.path.getsize", return_value=2048)
+    @patch("src.video_processor.os.path.exists")
+    @patch("src.video_processor.subprocess.run")
+    def test_overlay_includes_game_bar_and_keywords(
+        self, mock_run, mock_exists, mock_getsize, mock_replace, mock_font
+    ):
+        mock_exists.side_effect = [True, True]
+        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+
+        result = burn_context_overlay(
+            "in.mp4",
+            "out.mp4",
+            "Valorant",
+            "Insane 1v5 clutch to save the round",
+        )
+
+        assert result is True
+        cmd = mock_run.call_args[0][0]
+        assert isinstance(cmd, list)
+        assert "-vf" in cmd
+        vf = cmd[cmd.index("-vf") + 1]
+        assert "drawbox=" in vf
+        assert "VALORANT" in vf
+        assert "1V5" in vf
+        assert "enable='lt(t,2)'" in vf
+
+    @patch("src.video_processor._find_context_fontfile", return_value=None)
+    @patch("src.video_processor.os.replace")
+    @patch("src.video_processor.os.path.getsize", return_value=2048)
+    @patch("src.video_processor.os.path.exists")
+    @patch("src.video_processor.subprocess.run")
+    def test_overlay_omits_center_text_without_keywords(
+        self, mock_run, mock_exists, mock_getsize, mock_replace, mock_font
+    ):
+        mock_exists.side_effect = [True, True]
+        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+
+        result = burn_context_overlay(
+            "in.mp4",
+            "out.mp4",
+            "Apex Legends",
+            "clean rotation and final ring win",
+        )
+
+        assert result is True
+        cmd = mock_run.call_args[0][0]
+        vf = cmd[cmd.index("-vf") + 1]
+        assert "APEX LEGENDS" in vf
+        assert "enable='lt(t,2)'" not in vf
+
+    @patch("src.video_processor.subprocess.run")
+    @patch("src.video_processor.os.path.exists", return_value=False)
+    def test_missing_input_returns_false(self, mock_exists, mock_run):
+        result = burn_context_overlay("missing.mp4", "out.mp4", "Valorant", "CLUTCH")
+        assert result is False
+        mock_run.assert_not_called()
+
+    @patch("src.video_processor.safe_remove")
+    @patch("src.video_processor.subprocess.run", side_effect=Exception("ffmpeg error"))
+    @patch("src.video_processor.os.path.exists", return_value=True)
+    def test_failure_cleans_tmp_output(self, mock_exists, mock_run, mock_remove):
+        result = burn_context_overlay("in.mp4", "out.mp4", "Valorant", "INSANE")
+        assert result is False
+        mock_remove.assert_called_once_with("out.mp4.ctx.tmp.mp4")
 
 
 class TestSubtitleIntegration:

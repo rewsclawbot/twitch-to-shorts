@@ -12,6 +12,69 @@ from src.models import FacecamConfig
 
 log = logging.getLogger(__name__)
 
+_CONTEXT_KEYWORD_PATTERNS = [
+    (r"\b1\s*V\s*5\b", "1V5"),
+    (r"\b1\s*V\s*4\b", "1V4"),
+    (r"\b1\s*V\s*3\b", "1V3"),
+    (r"\b1\s*V\s*2\b", "1V2"),
+    (r"\bCLUTCH\b", "CLUTCH"),
+    (r"\bACE\b", "ACE"),
+    (r"\bINSANE\b", "INSANE"),
+    (r"\bCRAZY\b", "CRAZY"),
+    (r"\bUNREAL\b", "UNREAL"),
+    (r"\bSAVAGE\b", "SAVAGE"),
+    (r"\bPENTAKILL\b", "PENTAKILL"),
+    (r"\bTEAMWIPE\b", "TEAMWIPE"),
+    (r"\bHEADSHOT\b", "HEADSHOT"),
+    (r"\bNOSCOPE\b", "NOSCOPE"),
+]
+
+_CONTEXT_FONT_CANDIDATES = [
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    "/Library/Fonts/Arial Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "C:/Windows/Fonts/arialbd.ttf",
+]
+
+
+def _escape_drawtext_text(text: str) -> str:
+    escaped = " ".join(str(text).split())
+    escaped = escaped.replace("\\", r"\\\\")
+    escaped = escaped.replace(":", r"\:")
+    escaped = escaped.replace("'", r"\'")
+    escaped = escaped.replace("%", r"\%")
+    escaped = escaped.replace(",", r"\,")
+    escaped = escaped.replace("[", r"\[").replace("]", r"\]")
+    return escaped
+
+
+def _escape_drawtext_path(path: str) -> str:
+    escaped = path.replace("\\", "/")
+    escaped = escaped.replace(":", r"\:")
+    escaped = escaped.replace("'", r"\'")
+    escaped = escaped.replace("[", r"\[").replace("]", r"\]")
+    return escaped
+
+
+def _find_context_fontfile() -> str | None:
+    for candidate in _CONTEXT_FONT_CANDIDATES:
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def _extract_context_keywords(title: str, max_keywords: int = 2) -> list[str]:
+    title_upper = (title or "").upper()
+    matches: list[str] = []
+    for pattern, label in _CONTEXT_KEYWORD_PATTERNS:
+        if re.search(pattern, title_upper):
+            matches.append(label)
+            if len(matches) >= max_keywords:
+                break
+    return matches
+
 
 def _probe_video_info(path: str) -> tuple[float | None, tuple[int, int] | None]:
     """Probe duration and dimensions in a single ffprobe call.
@@ -143,6 +206,76 @@ def extract_thumbnail(
         safe_remove(output_path)
         return None
     return output_path
+
+
+def burn_context_overlay(video_path: str, output_path: str, game_name: str, title: str) -> bool:
+    """Burn lightweight context text overlays into a clip using ffmpeg drawtext."""
+    if not os.path.exists(video_path):
+        return False
+
+    game_label = (game_name or "GAMEPLAY").strip().upper()
+    if not game_label:
+        game_label = "GAMEPLAY"
+    game_label = _escape_drawtext_text(game_label[:48])
+
+    emphasis_words = _extract_context_keywords(title)
+    emphasis_label = _escape_drawtext_text(" | ".join(emphasis_words)) if emphasis_words else ""
+
+    fontfile = _find_context_fontfile()
+    font_prefix = f"fontfile='{_escape_drawtext_path(fontfile)}':" if fontfile else ""
+
+    filter_parts = [
+        "drawbox=x=0:y=0:w=iw:h=92:color=black@0.45:t=fill",
+        (
+            f"drawtext={font_prefix}text='{game_label}':x=(w-text_w)/2:y=26"
+            ":fontsize=40:fontcolor=white:borderw=3:bordercolor=black@0.95"
+        ),
+    ]
+    if emphasis_label:
+        filter_parts.append(
+            (
+                f"drawtext={font_prefix}text='{emphasis_label}':x=(w-text_w)/2:y=(h-text_h)/2"
+                ":fontsize=132:fontcolor=white:borderw=6:bordercolor=black@0.95"
+                ":enable='lt(t,2)'"
+            )
+        )
+    vf = ",".join(filter_parts)
+
+    tmp_output = output_path + ".ctx.tmp.mp4"
+    cmd = [
+        FFMPEG,
+        "-y",
+        "-i", video_path,
+        "-vf", vf,
+        "-map", "0:v:0",
+        "-map", "0:a?",
+        "-c:v", "libx264",
+        "-crf", "20",
+        "-preset", "fast",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-movflags", "+faststart",
+        tmp_output,
+    ]
+
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=180)
+    except subprocess.CalledProcessError as e:
+        err = (e.stderr or "")[-500:]
+        log.warning("Context overlay ffmpeg failed for %s: %s", video_path, err)
+        safe_remove(tmp_output)
+        return False
+    except Exception as e:
+        log.warning("Context overlay failed for %s: %s", video_path, e)
+        safe_remove(tmp_output)
+        return False
+
+    if not os.path.exists(tmp_output) or os.path.getsize(tmp_output) == 0:
+        safe_remove(tmp_output)
+        return False
+
+    os.replace(tmp_output, output_path)
+    return True
 
 
 def detect_leading_silence(input_path: str, threshold_db: float = -30, min_duration: float = 0.5) -> float:
