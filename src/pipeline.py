@@ -1013,8 +1013,9 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
     thumbnail_width = int(youtube_cfg.get("thumbnail_width", 1280))
     extra_tags_global = youtube_cfg.get("extra_tags") or []
     captions_enabled = cfg.captions_enabled
-    if captions_enabled and not os.environ.get("DEEPGRAM_API_KEY"):
-        log.warning("captions_enabled=True but DEEPGRAM_API_KEY not set — captions will be skipped")
+    caption_backend = os.environ.get("CAPTION_BACKEND", "auto").strip().lower()
+    if captions_enabled and caption_backend not in ("whisper",) and not os.environ.get("DEEPGRAM_API_KEY"):
+        log.warning("captions_enabled=True but DEEPGRAM_API_KEY not set and CAPTION_BACKEND != whisper — captions may be skipped")
 
     if isinstance(title_templates, str):
         title_templates = [title_templates]
