@@ -19,3 +19,6 @@ __pycache__/
 
 # Windows artifacts
 NUL
+
+# Virtual environment
+.venv/
