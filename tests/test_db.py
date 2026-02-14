@@ -18,6 +18,7 @@ from src.db import (
     recent_upload_count,
     record_known_clip,
     touch_youtube_metrics_sync,
+    update_last_failed_at,
     update_instagram_id,
     update_streamer_stats,
     update_youtube_metrics,
@@ -186,6 +187,21 @@ class TestIncrementFailCount:
         row = conn.execute("SELECT fail_count, last_failed_at FROM clips WHERE clip_id = ?", (clip.id,)).fetchone()
         assert row["fail_count"] == 2
         assert row["last_failed_at"] != old_ts
+
+
+class TestUpdateLastFailedAt:
+    def test_updates_timestamp_for_existing_clip(self, conn):
+        clip = make_clip(clip_id="fail_touch")
+        increment_fail_count(conn, clip)
+        custom = "2026-02-14T10:00:00+00:00"
+        update_last_failed_at(conn, clip.id, custom)
+        row = conn.execute("SELECT last_failed_at FROM clips WHERE clip_id = ?", (clip.id,)).fetchone()
+        assert row["last_failed_at"] == custom
+
+    def test_missing_clip_is_noop(self, conn):
+        update_last_failed_at(conn, "missing_clip", "2026-02-14T10:00:00+00:00")
+        row = conn.execute("SELECT * FROM clips WHERE clip_id = 'missing_clip'").fetchone()
+        assert row is None
 
 
 class TestRecentUploadCount:

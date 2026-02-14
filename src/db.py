@@ -319,6 +319,16 @@ def increment_fail_count(conn: sqlite3.Connection, clip: Clip):
     conn.commit()
 
 
+def update_last_failed_at(conn: sqlite3.Connection, clip_id: str, failed_at: str | None = None):
+    """Update last_failed_at for a clip (uses current UTC time by default)."""
+    effective_failed_at = failed_at or datetime.now(UTC).isoformat()
+    conn.execute(
+        "UPDATE clips SET last_failed_at = ? WHERE clip_id = ?",
+        (effective_failed_at, clip_id),
+    )
+    conn.commit()
+
+
 def get_clips_for_metrics(
     conn: sqlite3.Connection,
     streamer: str,
@@ -430,39 +440,49 @@ def get_streamer_performance_multiplier(conn: sqlite3.Connection, streamer: str)
 
 def get_title_variant_performance(
     conn: sqlite3.Connection,
-    streamer: str,
-    min_samples: int = 5,
+    streamer: str | None = None,
+    min_uploads: int = 5,
+    min_samples: int | None = None,
 ) -> dict[str, float]:
     """Return per-title-variant CTR multipliers relative to this streamer's baseline."""
+    threshold = min_uploads if min_samples is None else min_samples
+    streamer_filter = ""
+    params: list[object] = []
+    if streamer:
+        streamer_filter = "AND streamer = ?"
+        params.append(streamer)
     baseline = conn.execute(
         """SELECT AVG(yt_impressions_ctr) as avg_ctr, COUNT(*) as cnt
            FROM clips
-           WHERE streamer = ?
+           WHERE 1=1
+             {streamer_filter}
              AND title_variant IS NOT NULL
              AND title_variant != ''
-             AND yt_impressions_ctr IS NOT NULL""",
-        (streamer,),
+             AND yt_impressions_ctr IS NOT NULL""".format(streamer_filter=streamer_filter),
+        params,
     ).fetchone()
-    if not baseline or baseline["cnt"] < min_samples:
+    if not baseline or baseline["cnt"] < threshold:
         return {}
     avg_ctr_raw = baseline["avg_ctr"]
     if not isinstance(avg_ctr_raw, (int, float)) or avg_ctr_raw <= 0:
         return {}
     avg_ctr = float(avg_ctr_raw)
+    row_params = list(params)
     rows = conn.execute(
         """SELECT title_variant, AVG(yt_impressions_ctr) as variant_ctr, COUNT(*) as cnt
            FROM clips
-           WHERE streamer = ?
+           WHERE 1=1
+             {streamer_filter}
              AND title_variant IS NOT NULL
              AND title_variant != ''
              AND yt_impressions_ctr IS NOT NULL
-           GROUP BY title_variant""",
-        (streamer,),
+           GROUP BY title_variant""".format(streamer_filter=streamer_filter),
+        row_params,
     ).fetchall()
     multipliers: dict[str, float] = {}
     for row in rows:
         variant = row["title_variant"]
-        if not isinstance(variant, str) or row["cnt"] < min_samples:
+        if not isinstance(variant, str) or row["cnt"] < threshold:
             continue
         variant_ctr = row["variant_ctr"]
         if not isinstance(variant_ctr, (int, float)) or variant_ctr <= 0:
@@ -473,39 +493,49 @@ def get_title_variant_performance(
 
 def get_game_performance(
     conn: sqlite3.Connection,
-    streamer: str,
-    min_samples: int = 5,
+    streamer: str | None = None,
+    min_uploads: int = 5,
+    min_samples: int | None = None,
 ) -> dict[str, float]:
     """Return per-game CTR multipliers relative to this streamer's baseline."""
+    threshold = min_uploads if min_samples is None else min_samples
+    streamer_filter = ""
+    params: list[object] = []
+    if streamer:
+        streamer_filter = "AND streamer = ?"
+        params.append(streamer)
     baseline = conn.execute(
         """SELECT AVG(yt_impressions_ctr) as avg_ctr, COUNT(*) as cnt
            FROM clips
-           WHERE streamer = ?
+           WHERE 1=1
+             {streamer_filter}
              AND game_name IS NOT NULL
              AND game_name != ''
-             AND yt_impressions_ctr IS NOT NULL""",
-        (streamer,),
+             AND yt_impressions_ctr IS NOT NULL""".format(streamer_filter=streamer_filter),
+        params,
     ).fetchone()
-    if not baseline or baseline["cnt"] < min_samples:
+    if not baseline or baseline["cnt"] < threshold:
         return {}
     avg_ctr_raw = baseline["avg_ctr"]
     if not isinstance(avg_ctr_raw, (int, float)) or avg_ctr_raw <= 0:
         return {}
     avg_ctr = float(avg_ctr_raw)
+    row_params = list(params)
     rows = conn.execute(
         """SELECT game_name, AVG(yt_impressions_ctr) as game_ctr, COUNT(*) as cnt
            FROM clips
-           WHERE streamer = ?
+           WHERE 1=1
+             {streamer_filter}
              AND game_name IS NOT NULL
              AND game_name != ''
              AND yt_impressions_ctr IS NOT NULL
-           GROUP BY game_name""",
-        (streamer,),
+           GROUP BY game_name""".format(streamer_filter=streamer_filter),
+        row_params,
     ).fetchall()
     multipliers: dict[str, float] = {}
     for row in rows:
         game_name = row["game_name"]
-        if not isinstance(game_name, str) or row["cnt"] < min_samples:
+        if not isinstance(game_name, str) or row["cnt"] < threshold:
             continue
         game_ctr = row["game_ctr"]
         if not isinstance(game_ctr, (int, float)) or game_ctr <= 0:

@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from main import (
+from src.pipeline import (
     _is_within_posting_window,
     _process_single_clip,
     _process_streamer,
@@ -93,34 +93,34 @@ class TestProcessSingleClip:
             thumbnail_enabled=False, thumbnail_samples=8, thumbnail_width=1280,
         )
 
-    @patch("main.check_channel_for_duplicate", return_value=None)
-    @patch("main.build_upload_title", return_value="Test Title")
-    @patch("main.download_clip", return_value=None)
+    @patch("src.pipeline.check_channel_for_duplicate", return_value=None)
+    @patch("src.pipeline.build_upload_title", return_value="Test Title")
+    @patch("src.pipeline.download_clip", return_value=None)
     def test_download_fail(self, mock_dl, mock_title, mock_dedup, clip, yt_service, conn, cfg, streamer, log):
         result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
         assert result == "downloaded_fail"
         assert yt_id is None
 
-    @patch("main._cleanup_tmp_files")
-    @patch("main.check_channel_for_duplicate", return_value=None)
-    @patch("main.build_upload_title", return_value="Test Title")
-    @patch("main.crop_to_vertical", return_value=None)
-    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.check_channel_for_duplicate", return_value=None)
+    @patch("src.pipeline.build_upload_title", return_value="Test Title")
+    @patch("src.pipeline.crop_to_vertical", return_value=None)
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
     def test_process_fail(self, mock_dl, mock_crop, mock_title, mock_dedup, mock_clean, clip, yt_service, conn, cfg, streamer, log):
         result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
         assert result == "processed_fail"
         assert yt_id is None
 
-    @patch("main._cleanup_tmp_files")
-    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
-    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
     def test_dry_run(self, mock_dl, mock_crop, mock_clean, clip, yt_service, conn, cfg, streamer, log):
         result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log, dry_run=True)
         assert result == "dry_run"
         assert yt_id is None
 
-    @patch("main.check_channel_for_duplicate", return_value="existing_yt_id")
-    @patch("main.build_upload_title", return_value="Test Title")
+    @patch("src.pipeline.check_channel_for_duplicate", return_value="existing_yt_id")
+    @patch("src.pipeline.build_upload_title", return_value="Test Title")
     def test_duplicate_detected(self, mock_title, mock_dedup,
                                  clip, yt_service, conn, cfg, streamer, log):
         result, _yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
@@ -128,57 +128,57 @@ class TestProcessSingleClip:
         assert clip.youtube_id == "existing_yt_id"
         mock_dedup.assert_called_once_with(yt_service, "Test Title", cache_key="creds/test.json")
 
-    @patch("main._cleanup_tmp_files")
-    @patch("main.upload_short", side_effect=QuotaExhaustedError("quotaExceeded"))
-    @patch("main.check_channel_for_duplicate", return_value=None)
-    @patch("main.build_upload_title", return_value="Test Title")
-    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
-    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.upload_short", side_effect=QuotaExhaustedError("quotaExceeded"))
+    @patch("src.pipeline.check_channel_for_duplicate", return_value=None)
+    @patch("src.pipeline.build_upload_title", return_value="Test Title")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
     def test_quota_exhausted(self, mock_dl, mock_crop, mock_title, mock_dedup, mock_upload,
                               mock_clean, clip, yt_service, conn, cfg, streamer, log):
         result, _yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
         assert result == "quota_exhausted"
 
-    @patch("main._cleanup_tmp_files")
-    @patch("main.upload_short", side_effect=ForbiddenError("unknown"))
-    @patch("main.check_channel_for_duplicate", return_value=None)
-    @patch("main.build_upload_title", return_value="Test Title")
-    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
-    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.upload_short", side_effect=ForbiddenError("unknown"))
+    @patch("src.pipeline.check_channel_for_duplicate", return_value=None)
+    @patch("src.pipeline.build_upload_title", return_value="Test Title")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
     def test_forbidden(self, mock_dl, mock_crop, mock_title, mock_dedup, mock_upload,
                         mock_clean, clip, yt_service, conn, cfg, streamer, log):
         result, _yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
         assert result == "forbidden"
 
-    @patch("main._cleanup_tmp_files")
-    @patch("main.upload_short", side_effect=AuthenticationError("RedirectMissingLocation"))
-    @patch("main.check_channel_for_duplicate", return_value=None)
-    @patch("main.build_upload_title", return_value="Test Title")
-    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
-    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.upload_short", side_effect=AuthenticationError("RedirectMissingLocation"))
+    @patch("src.pipeline.check_channel_for_duplicate", return_value=None)
+    @patch("src.pipeline.build_upload_title", return_value="Test Title")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
     def test_auth_error(self, mock_dl, mock_crop, mock_title, mock_dedup, mock_upload,
                          mock_clean, clip, yt_service, conn, cfg, streamer, log):
         result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
         assert result == "auth_error"
         assert yt_id is None
 
-    @patch("main._cleanup_tmp_files")
-    @patch("main.upload_short", return_value=None)
-    @patch("main.check_channel_for_duplicate", return_value=None)
-    @patch("main.build_upload_title", return_value="Test Title")
-    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
-    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.upload_short", return_value=None)
+    @patch("src.pipeline.check_channel_for_duplicate", return_value=None)
+    @patch("src.pipeline.build_upload_title", return_value="Test Title")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
     def test_upload_fail(self, mock_dl, mock_crop, mock_title, mock_dedup, mock_upload,
                           mock_clean, clip, yt_service, conn, cfg, streamer, log):
         result, _yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
         assert result == "upload_fail"
 
-    @patch("main._cleanup_tmp_files")
-    @patch("main.upload_short", return_value="yt_abc123")
-    @patch("main.check_channel_for_duplicate", return_value=None)
-    @patch("main.build_upload_title", return_value="Test Title")
-    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
-    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.upload_short", return_value="yt_abc123")
+    @patch("src.pipeline.check_channel_for_duplicate", return_value=None)
+    @patch("src.pipeline.build_upload_title", return_value="Test Title")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
     def test_successful_upload(self, mock_dl, mock_crop, mock_title, mock_dedup, mock_upload,
                                 mock_clean, clip, yt_service, conn, cfg, streamer, log):
         result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log)
@@ -192,15 +192,15 @@ class TestProcessSingleClip:
 
     def test_verify_upload_not_in_module(self, clip, yt_service, conn, cfg, streamer, log):
         """verify_upload() should not be imported in main.py (removed from hot path)."""
-        import main
-        assert not hasattr(main, "verify_upload"), "verify_upload should not be imported in main.py"
+        import src.pipeline as pipeline_module
+        assert not hasattr(pipeline_module, "verify_upload"), "verify_upload should not be imported in src.pipeline"
 
-    @patch("main._cleanup_tmp_files")
-    @patch("main.upload_short", return_value="yt_abc123")
-    @patch("main.check_channel_for_duplicate", return_value=None)
-    @patch("main.build_upload_title", return_value="Prebuilt Title")
-    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
-    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.upload_short", return_value="yt_abc123")
+    @patch("src.pipeline.check_channel_for_duplicate", return_value=None)
+    @patch("src.pipeline.build_upload_title", return_value="Prebuilt Title")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
     def test_prebuilt_title_passed_to_upload(self, mock_dl, mock_crop, mock_title, mock_dedup,
                                               mock_upload, mock_clean, clip, yt_service, conn, cfg, streamer, log):
         """prebuilt_title from build_upload_title should be passed through to upload_short."""
@@ -209,13 +209,13 @@ class TestProcessSingleClip:
         _, kwargs = mock_upload.call_args
         assert kwargs["prebuilt_title"] == "Prebuilt Title"
 
-    @patch("main._cleanup_tmp_files")
-    @patch("main.upload_short", return_value="yt_abc123")
-    @patch("main.check_channel_for_duplicate", return_value=None)
-    @patch("main.optimize_title", return_value="Optimized Title")
-    @patch("main.build_upload_title", return_value="Prebuilt Title")
-    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
-    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.upload_short", return_value="yt_abc123")
+    @patch("src.pipeline.check_channel_for_duplicate", return_value=None)
+    @patch("src.pipeline.optimize_title", return_value="Optimized Title")
+    @patch("src.pipeline.build_upload_title", return_value="Prebuilt Title")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
     def test_title_optimizer_changes_prebuilt_title(self, mock_dl, mock_crop, mock_title, mock_optimize,
                                                     mock_dedup, mock_upload, mock_clean,
                                                     clip, yt_service, conn, cfg, streamer, log):
@@ -230,14 +230,14 @@ class TestProcessSingleClip:
         assert row is not None
         assert row["title_variant"] == "original+optimized"
 
-    @patch("main._cleanup_tmp_files")
-    @patch("main.set_thumbnail", return_value=True)
-    @patch("main.extract_thumbnail", return_value="/tmp/test/thumb.jpg")
-    @patch("main.upload_short", return_value="yt_abc123")
-    @patch("main.check_channel_for_duplicate", return_value=None)
-    @patch("main.build_upload_title", return_value="Test Title")
-    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
-    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.set_thumbnail", return_value=True)
+    @patch("src.pipeline.extract_thumbnail", return_value="/tmp/test/thumb.jpg")
+    @patch("src.pipeline.upload_short", return_value="yt_abc123")
+    @patch("src.pipeline.check_channel_for_duplicate", return_value=None)
+    @patch("src.pipeline.build_upload_title", return_value="Test Title")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
     def test_thumbnail_extraction_on_success(self, mock_dl, mock_crop, mock_title, mock_dedup,
                                               mock_upload, mock_thumb, mock_set_thumb,
                                               mock_clean, clip, yt_service, conn, cfg, streamer, log):
@@ -269,14 +269,14 @@ class TestProcessSingleClipInstagram:
             ig_caption_template=None, ig_caption_templates=None, ig_hashtags=None,
         )
 
-    @patch("main.update_instagram_id")
-    @patch("main.upload_reel", return_value="ig_media_123")
-    @patch("main._cleanup_tmp_files")
-    @patch("main.upload_short", return_value="yt_abc123")
-    @patch("main.check_channel_for_duplicate", return_value=None)
-    @patch("main.build_upload_title", return_value="Test Title")
-    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
-    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    @patch("src.pipeline.update_instagram_id")
+    @patch("src.pipeline.upload_reel", return_value="ig_media_123")
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.upload_short", return_value="yt_abc123")
+    @patch("src.pipeline.check_channel_for_duplicate", return_value=None)
+    @patch("src.pipeline.build_upload_title", return_value="Test Title")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
     def test_instagram_uploads_after_youtube(self, mock_dl, mock_crop, mock_title,
                                               mock_dedup, mock_upload, mock_clean,
                                               mock_ig_upload, mock_ig_update,
@@ -288,13 +288,13 @@ class TestProcessSingleClipInstagram:
         mock_ig_upload.assert_called_once()
         mock_ig_update.assert_called_once_with(conn, clip.id, "ig_media_123")
 
-    @patch("main.upload_reel", side_effect=InstagramAuthError("bad token"))
-    @patch("main._cleanup_tmp_files")
-    @patch("main.upload_short", return_value="yt_abc123")
-    @patch("main.check_channel_for_duplicate", return_value=None)
-    @patch("main.build_upload_title", return_value="Test Title")
-    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
-    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    @patch("src.pipeline.upload_reel", side_effect=InstagramAuthError("bad token"))
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.upload_short", return_value="yt_abc123")
+    @patch("src.pipeline.check_channel_for_duplicate", return_value=None)
+    @patch("src.pipeline.build_upload_title", return_value="Test Title")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
     def test_instagram_auth_error_doesnt_block_youtube(self, mock_dl, mock_crop, mock_title,
                                                         mock_dedup, mock_upload, mock_clean,
                                                         mock_ig_upload,
@@ -304,13 +304,13 @@ class TestProcessSingleClipInstagram:
         assert result == "uploaded"
         assert yt_id == "yt_abc123"
 
-    @patch("main.upload_reel", side_effect=InstagramRateLimitError("429"))
-    @patch("main._cleanup_tmp_files")
-    @patch("main.upload_short", return_value="yt_abc123")
-    @patch("main.check_channel_for_duplicate", return_value=None)
-    @patch("main.build_upload_title", return_value="Test Title")
-    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
-    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    @patch("src.pipeline.upload_reel", side_effect=InstagramRateLimitError("429"))
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.upload_short", return_value="yt_abc123")
+    @patch("src.pipeline.check_channel_for_duplicate", return_value=None)
+    @patch("src.pipeline.build_upload_title", return_value="Test Title")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
     def test_instagram_rate_limit_sets_state(self, mock_dl, mock_crop, mock_title,
                                               mock_dedup, mock_upload, mock_clean,
                                               mock_ig_upload,
@@ -331,13 +331,13 @@ class TestProcessSingleClipInstagram:
         assert yt_id == "yt_abc123"
         assert ig_state[0] is True
 
-    @patch("main.upload_reel", side_effect=Exception("IG crash"))
-    @patch("main._cleanup_tmp_files")
-    @patch("main.upload_short", return_value="yt_abc123")
-    @patch("main.check_channel_for_duplicate", return_value=None)
-    @patch("main.build_upload_title", return_value="Test Title")
-    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
-    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    @patch("src.pipeline.upload_reel", side_effect=Exception("IG crash"))
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.upload_short", return_value="yt_abc123")
+    @patch("src.pipeline.check_channel_for_duplicate", return_value=None)
+    @patch("src.pipeline.build_upload_title", return_value="Test Title")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
     def test_instagram_crash_doesnt_affect_youtube(self, mock_dl, mock_crop, mock_title,
                                                      mock_dedup, mock_upload, mock_clean,
                                                      mock_ig_upload,
@@ -347,13 +347,13 @@ class TestProcessSingleClipInstagram:
         assert result == "uploaded"
         assert yt_id == "yt_abc123"
 
-    @patch("main.upload_reel")
-    @patch("main._cleanup_tmp_files")
-    @patch("main.upload_short", return_value="yt_abc123")
-    @patch("main.check_channel_for_duplicate", return_value=None)
-    @patch("main.build_upload_title", return_value="Test Title")
-    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
-    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    @patch("src.pipeline.upload_reel")
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.upload_short", return_value="yt_abc123")
+    @patch("src.pipeline.check_channel_for_duplicate", return_value=None)
+    @patch("src.pipeline.build_upload_title", return_value="Test Title")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
     def test_instagram_skipped_when_no_credentials(self, mock_dl, mock_crop, mock_title,
                                                      mock_dedup, mock_upload, mock_clean,
                                                      mock_ig_upload,
@@ -370,13 +370,13 @@ class TestProcessSingleClipInstagram:
         assert result == "uploaded"
         mock_ig_upload.assert_not_called()
 
-    @patch("main.upload_reel")
-    @patch("main._cleanup_tmp_files")
-    @patch("main.upload_short", return_value="yt_abc123")
-    @patch("main.check_channel_for_duplicate", return_value=None)
-    @patch("main.build_upload_title", return_value="Test Title")
-    @patch("main.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
-    @patch("main.download_clip", return_value="/tmp/test/clip_1.mp4")
+    @patch("src.pipeline.upload_reel")
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.upload_short", return_value="yt_abc123")
+    @patch("src.pipeline.check_channel_for_duplicate", return_value=None)
+    @patch("src.pipeline.build_upload_title", return_value="Test Title")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
     def test_instagram_skipped_when_disabled(self, mock_dl, mock_crop, mock_title,
                                                mock_dedup, mock_upload, mock_clean,
                                                mock_ig_upload,
@@ -398,11 +398,11 @@ class TestProcessStreamer:
             },
         }
 
-    @patch("main.update_streamer_stats")
-    @patch("main.get_authenticated_service", return_value=MagicMock())
-    @patch("main.recent_upload_count", return_value=0)
-    @patch("main.filter_new_clips")
-    @patch("main.filter_and_rank")
+    @patch("src.pipeline.update_streamer_stats")
+    @patch("src.pipeline.get_authenticated_service", return_value=MagicMock())
+    @patch("src.pipeline.recent_upload_count", return_value=0)
+    @patch("src.pipeline.filter_new_clips")
+    @patch("src.pipeline.filter_and_rank")
     def test_upload_spacing_enforced(self, mock_rank, mock_dedup, mock_recent,
                                       mock_auth, mock_stats, conn, cfg, streamer, log):
         """When recent_upload_count == max_uploads_per_window, no uploads happen."""
@@ -422,7 +422,7 @@ class TestProcessStreamer:
         _fetched, _filtered, _downloaded, _processed, uploaded, _failed, _quota_exhausted, _skip_reason = result
         assert uploaded == 0  # No uploads due to spacing
 
-    @patch("main._sync_streamer_metrics", return_value=2)
+    @patch("src.pipeline._sync_streamer_metrics", return_value=2)
     def test_analytics_sync_runs_when_no_clips(self, mock_sync, conn, cfg, streamer, log):
         cfg.analytics_enabled = True
         twitch = MagicMock()
@@ -437,10 +437,10 @@ class TestProcessStreamer:
         assert quota is False
         mock_sync.assert_called_once()
 
-    @patch("main._sync_streamer_metrics", return_value=1)
-    @patch("main.recent_upload_count", return_value=1)
-    @patch("main.filter_new_clips")
-    @patch("main.filter_and_rank")
+    @patch("src.pipeline._sync_streamer_metrics", return_value=1)
+    @patch("src.pipeline.recent_upload_count", return_value=1)
+    @patch("src.pipeline.filter_new_clips")
+    @patch("src.pipeline.filter_and_rank")
     def test_analytics_sync_runs_when_spacing_limited(self, mock_rank, mock_dedup, mock_recent,
                                                       mock_sync, conn, cfg, streamer, log):
         cfg.analytics_enabled = True
@@ -463,12 +463,12 @@ class TestProcessStreamer:
         assert quota is False
         mock_sync.assert_called_once()
 
-    @patch("main.update_streamer_stats")
-    @patch("main._process_single_clip")
-    @patch("main.get_authenticated_service", return_value=MagicMock())
-    @patch("main.recent_upload_count", return_value=0)
-    @patch("main.filter_new_clips")
-    @patch("main.filter_and_rank")
+    @patch("src.pipeline.update_streamer_stats")
+    @patch("src.pipeline._process_single_clip")
+    @patch("src.pipeline.get_authenticated_service", return_value=MagicMock())
+    @patch("src.pipeline.recent_upload_count", return_value=0)
+    @patch("src.pipeline.filter_new_clips")
+    @patch("src.pipeline.filter_and_rank")
     def test_consecutive_403_circuit_breaker(self, mock_rank, mock_dedup, mock_recent,
                                               mock_auth, mock_process, mock_stats,
                                               conn, cfg, streamer, log):
@@ -506,12 +506,12 @@ class TestProcessStreamer:
         # Only 3 calls to _process_single_clip (4th and 5th skipped)
         assert mock_process.call_count == 3
 
-    @patch("main.update_streamer_stats")
-    @patch("main._process_single_clip")
-    @patch("main.get_authenticated_service", return_value=MagicMock())
-    @patch("main.recent_upload_count", return_value=0)
-    @patch("main.filter_new_clips")
-    @patch("main.filter_and_rank")
+    @patch("src.pipeline.update_streamer_stats")
+    @patch("src.pipeline._process_single_clip")
+    @patch("src.pipeline.get_authenticated_service", return_value=MagicMock())
+    @patch("src.pipeline.recent_upload_count", return_value=0)
+    @patch("src.pipeline.filter_new_clips")
+    @patch("src.pipeline.filter_and_rank")
     def test_quota_exhausted_stops_processing(self, mock_rank, mock_dedup, mock_recent,
                                                mock_auth, mock_process, mock_stats,
                                                conn, cfg, streamer, log):
@@ -544,12 +544,12 @@ class TestProcessStreamer:
         assert uploaded == 1
         assert mock_process.call_count == 2
 
-    @patch("main.update_streamer_stats")
-    @patch("main._process_single_clip")
-    @patch("main.get_authenticated_service", return_value=MagicMock())
-    @patch("main.recent_upload_count", return_value=0)
-    @patch("main.filter_new_clips")
-    @patch("main.filter_and_rank")
+    @patch("src.pipeline.update_streamer_stats")
+    @patch("src.pipeline._process_single_clip")
+    @patch("src.pipeline.get_authenticated_service", return_value=MagicMock())
+    @patch("src.pipeline.recent_upload_count", return_value=0)
+    @patch("src.pipeline.filter_new_clips")
+    @patch("src.pipeline.filter_and_rank")
     def test_auth_error_breaks_loop(self, mock_rank, mock_dedup, mock_recent,
                                      mock_auth, mock_process, mock_stats,
                                      conn, cfg, streamer, log):
@@ -585,11 +585,11 @@ class TestProcessStreamer:
         assert failed == 1
         assert uploaded == 0
 
-    @patch("main.update_streamer_stats")
-    @patch("main._process_single_clip")
-    @patch("main.recent_upload_count", return_value=0)
-    @patch("main.filter_new_clips")
-    @patch("main.filter_and_rank")
+    @patch("src.pipeline.update_streamer_stats")
+    @patch("src.pipeline._process_single_clip")
+    @patch("src.pipeline.recent_upload_count", return_value=0)
+    @patch("src.pipeline.filter_new_clips")
+    @patch("src.pipeline.filter_and_rank")
     def test_dry_run_skips_auth(self, mock_rank, mock_dedup, mock_recent,
                                  mock_process, mock_stats, conn, cfg, streamer, log):
         clips = [
@@ -611,10 +611,10 @@ class TestProcessStreamer:
         _, _, _, _, uploaded, _, _, _ = result
         assert uploaded == 1
 
-    @patch("main.update_streamer_stats")
-    @patch("main.recent_upload_count", return_value=0)
-    @patch("main.filter_new_clips")
-    @patch("main.filter_and_rank")
+    @patch("src.pipeline.update_streamer_stats")
+    @patch("src.pipeline.recent_upload_count", return_value=0)
+    @patch("src.pipeline.filter_new_clips")
+    @patch("src.pipeline.filter_and_rank")
     def test_uploads_remaining_zero_skips_game_names(self, mock_rank, mock_dedup, mock_recent,
                                                        mock_stats, conn, cfg, streamer, log):
         """When uploads_remaining==0, get_game_names is NOT called (API call saved)."""
@@ -638,12 +638,12 @@ class TestProcessStreamer:
         # get_game_names should NOT have been called since uploads_remaining == 0
         twitch.get_game_names.assert_not_called()
 
-    @patch("main.update_streamer_stats")
-    @patch("main._process_single_clip")
-    @patch("main.get_authenticated_service", return_value=MagicMock())
-    @patch("main.recent_upload_count", return_value=0)
-    @patch("main.filter_new_clips")
-    @patch("main.filter_and_rank")
+    @patch("src.pipeline.update_streamer_stats")
+    @patch("src.pipeline._process_single_clip")
+    @patch("src.pipeline.get_authenticated_service", return_value=MagicMock())
+    @patch("src.pipeline.recent_upload_count", return_value=0)
+    @patch("src.pipeline.filter_new_clips")
+    @patch("src.pipeline.filter_and_rank")
     def test_loop_stops_after_uploads_remaining(self, mock_rank, mock_dedup, mock_recent,
                                                 mock_auth, mock_process, mock_stats,
                                                 conn, cfg, streamer, log):
@@ -673,12 +673,12 @@ class TestProcessStreamer:
         assert len(game_ids_arg) == 5
         assert mock_process.call_count == 2
 
-    @patch("main.update_streamer_stats")
-    @patch("main._process_single_clip")
-    @patch("main.get_authenticated_service", return_value=MagicMock())
-    @patch("main.recent_upload_count", return_value=0)
-    @patch("main.filter_new_clips")
-    @patch("main.filter_and_rank")
+    @patch("src.pipeline.update_streamer_stats")
+    @patch("src.pipeline._process_single_clip")
+    @patch("src.pipeline.get_authenticated_service", return_value=MagicMock())
+    @patch("src.pipeline.recent_upload_count", return_value=0)
+    @patch("src.pipeline.filter_new_clips")
+    @patch("src.pipeline.filter_and_rank")
     def test_instagram_rate_limit_disables_remaining_ig_uploads(self, mock_rank, mock_dedup, mock_recent,
                                                                  mock_auth, mock_process, mock_stats,
                                                                  conn, cfg, streamer, log):
@@ -701,8 +701,9 @@ class TestProcessStreamer:
         ig_credentials_history: list[str | None] = []
 
         def side_effect(*args, **kwargs):
-            ig_credentials_history.append(kwargs.get("ig_credentials"))
-            state = kwargs.get("ig_rate_limited_state")
+            context = args[1]
+            ig_credentials_history.append(context.ig_credentials)
+            state = context.ig_rate_limited_state
             if isinstance(state, list) and state and len(ig_credentials_history) == 1:
                 state[0] = True
             return ("uploaded", "yt_x")
@@ -717,7 +718,7 @@ class TestProcessStreamer:
         assert uploaded == 2
         assert ig_credentials_history == ["creds/ig.json", None]
 
-    @patch("main.update_streamer_stats")
+    @patch("src.pipeline.update_streamer_stats")
     def test_fetch_failure_returns_zeros(self, mock_stats, conn, cfg, streamer, log):
         twitch = MagicMock()
         twitch.fetch_clips.side_effect = Exception("network error")
@@ -731,10 +732,10 @@ class TestProcessStreamer:
         assert uploaded == 0
         assert quota is False
 
-    @patch("main.update_streamer_stats")
-    @patch("main.recent_upload_count", return_value=1)
-    @patch("main.filter_new_clips")
-    @patch("main.filter_and_rank")
+    @patch("src.pipeline.update_streamer_stats")
+    @patch("src.pipeline.recent_upload_count", return_value=1)
+    @patch("src.pipeline.filter_new_clips")
+    @patch("src.pipeline.filter_and_rank")
     def test_skip_reason_spacing_limited(self, mock_rank, mock_dedup, mock_recent,
                                          mock_stats, conn, cfg, streamer, log):
         cfg.max_uploads_per_window = 1
@@ -755,7 +756,7 @@ class TestProcessStreamer:
         assert uploaded == 0
         assert skip_reason == "spacing_limited"
 
-    @patch("main.update_streamer_stats")
+    @patch("src.pipeline.update_streamer_stats")
     def test_skip_reason_no_clips(self, mock_stats, conn, cfg, streamer, log):
         twitch = MagicMock()
         twitch.fetch_clips.return_value = []
@@ -768,12 +769,12 @@ class TestProcessStreamer:
         assert uploaded == 0
         assert skip_reason == "no_clips"
 
-    @patch("main.update_streamer_stats")
-    @patch("main._process_single_clip", return_value=("uploaded", "yt_1"))
-    @patch("main.get_authenticated_service", return_value=MagicMock())
-    @patch("main.recent_upload_count", return_value=0)
-    @patch("main.filter_new_clips")
-    @patch("main.filter_and_rank")
+    @patch("src.pipeline.update_streamer_stats")
+    @patch("src.pipeline._process_single_clip", return_value=("uploaded", "yt_1"))
+    @patch("src.pipeline.get_authenticated_service", return_value=MagicMock())
+    @patch("src.pipeline.recent_upload_count", return_value=0)
+    @patch("src.pipeline.filter_new_clips")
+    @patch("src.pipeline.filter_and_rank")
     def test_skip_reason_none_on_success(self, mock_rank, mock_dedup, mock_recent,
                                          mock_auth, mock_process, mock_stats,
                                          conn, cfg, streamer, log):
@@ -800,8 +801,8 @@ class TestProcessStreamer:
 
 class TestRunPipelineInner:
     @patch.dict("os.environ", {"TWITCH_CLIENT_ID": "id", "TWITCH_CLIENT_SECRET": "secret"})
-    @patch("main._process_streamer")
-    @patch("main.TwitchClient")
+    @patch("src.pipeline._process_streamer")
+    @patch("src.pipeline.TwitchClient")
     def test_happy_path_end_to_end(self, mock_twitch_cls, mock_process, conn, cfg):
         streamer = StreamerConfig(name="test", twitch_id="123", youtube_credentials="creds/t.json")
         raw_config = {"youtube": {"client_secrets_file": "creds/secrets.json"}}
@@ -819,8 +820,8 @@ class TestRunPipelineInner:
         )
 
     @patch.dict("os.environ", {"TWITCH_CLIENT_ID": "id", "TWITCH_CLIENT_SECRET": "secret"})
-    @patch("main._process_streamer")
-    @patch("main.TwitchClient")
+    @patch("src.pipeline._process_streamer")
+    @patch("src.pipeline.TwitchClient")
     def test_quota_exhausted_stops_all_streamers(self, mock_twitch_cls, mock_process, conn, cfg):
         streamer1 = StreamerConfig(name="s1", twitch_id="1", youtube_credentials="creds/s1.json")
         streamer2 = StreamerConfig(name="s2", twitch_id="2", youtube_credentials="creds/s2.json")
@@ -938,7 +939,7 @@ class TestValidateConfig:
             validate_config(streamers, raw)
 
     @patch.dict("os.environ", {"TWITCH_CLIENT_ID": "id", "TWITCH_CLIENT_SECRET": "secret"})
-    @patch("main.os.path.exists", return_value=False)
+    @patch("src.pipeline.os.path.exists", return_value=False)
     def test_analytics_enabled_missing_client_secrets_file_path_raises(self, mock_exists):
         streamers = [StreamerConfig(name="s", twitch_id="1", youtube_credentials="creds.json")]
         raw = {
@@ -949,7 +950,7 @@ class TestValidateConfig:
             validate_config(streamers, raw)
 
     @patch.dict("os.environ", {"TWITCH_CLIENT_ID": "id", "TWITCH_CLIENT_SECRET": "secret"})
-    @patch("main.os.path.exists")
+    @patch("src.pipeline.os.path.exists")
     def test_analytics_enabled_missing_streamer_credentials_path_raises(self, mock_exists):
         # client_secrets_file exists, streamer credentials do not
         mock_exists.side_effect = lambda p: p == "secrets.json"
@@ -971,8 +972,8 @@ class TestSyncStreamerMetrics:
         """Return a dict that looks like a sqlite3.Row from get_clips_for_metrics."""
         return {"youtube_id": youtube_id, "posted_at": posted_at}
 
-    @patch("main.get_analytics_service", return_value=MagicMock())
-    @patch("main.get_clips_for_metrics", return_value=[])
+    @patch("src.pipeline.get_analytics_service", return_value=MagicMock())
+    @patch("src.pipeline.get_clips_for_metrics", return_value=[])
     def test_no_eligible_clips(self, mock_clips, mock_service):
         conn = MagicMock()
         result = _sync_streamer_metrics(
@@ -981,13 +982,13 @@ class TestSyncStreamerMetrics:
         )
         assert result == 0
 
-    @patch("main.touch_youtube_metrics_sync", create=True)
-    @patch("main.update_youtube_reach_metrics")
-    @patch("main.get_reporting_service")
-    @patch("main.update_youtube_metrics")
-    @patch("main.fetch_video_metrics")
-    @patch("main.get_clips_for_metrics")
-    @patch("main.get_analytics_service", return_value=MagicMock())
+    @patch("src.pipeline.touch_youtube_metrics_sync", create=True)
+    @patch("src.pipeline.update_youtube_reach_metrics")
+    @patch("src.pipeline.get_reporting_service")
+    @patch("src.pipeline.update_youtube_metrics")
+    @patch("src.pipeline.fetch_video_metrics")
+    @patch("src.pipeline.get_clips_for_metrics")
+    @patch("src.pipeline.get_analytics_service", return_value=MagicMock())
     def test_analytics_success_full_metrics(self, mock_svc, mock_clips,
                                              mock_fetch, mock_update,
                                              mock_reporting_svc, mock_reach_update,
@@ -1015,14 +1016,14 @@ class TestSyncStreamerMetrics:
         mock_reporting_svc.assert_not_called()
         mock_touch.assert_not_called()
 
-    @patch("main.touch_youtube_metrics_sync", create=True)
-    @patch("main.update_youtube_reach_metrics")
-    @patch("main.fetch_reach_metrics")
-    @patch("main.get_reporting_service", return_value=MagicMock())
-    @patch("main.update_youtube_metrics")
-    @patch("main.fetch_video_metrics")
-    @patch("main.get_clips_for_metrics")
-    @patch("main.get_analytics_service", return_value=MagicMock())
+    @patch("src.pipeline.touch_youtube_metrics_sync", create=True)
+    @patch("src.pipeline.update_youtube_reach_metrics")
+    @patch("src.pipeline.fetch_reach_metrics")
+    @patch("src.pipeline.get_reporting_service", return_value=MagicMock())
+    @patch("src.pipeline.update_youtube_metrics")
+    @patch("src.pipeline.fetch_video_metrics")
+    @patch("src.pipeline.get_clips_for_metrics")
+    @patch("src.pipeline.get_analytics_service", return_value=MagicMock())
     def test_analytics_partial_triggers_reporting(self, mock_svc, mock_clips,
                                                     mock_fetch, mock_update,
                                                     mock_reporting_svc,
@@ -1057,14 +1058,14 @@ class TestSyncStreamerMetrics:
         mock_reach_update.assert_called_once()
         mock_touch.assert_not_called()
 
-    @patch("main.touch_youtube_metrics_sync", create=True)
-    @patch("main.update_youtube_reach_metrics")
-    @patch("main.fetch_reach_metrics")
-    @patch("main.get_reporting_service", return_value=MagicMock())
-    @patch("main.update_youtube_metrics")
-    @patch("main.fetch_video_metrics")
-    @patch("main.get_clips_for_metrics")
-    @patch("main.get_analytics_service", return_value=MagicMock())
+    @patch("src.pipeline.touch_youtube_metrics_sync", create=True)
+    @patch("src.pipeline.update_youtube_reach_metrics")
+    @patch("src.pipeline.fetch_reach_metrics")
+    @patch("src.pipeline.get_reporting_service", return_value=MagicMock())
+    @patch("src.pipeline.update_youtube_metrics")
+    @patch("src.pipeline.fetch_video_metrics")
+    @patch("src.pipeline.get_clips_for_metrics")
+    @patch("src.pipeline.get_analytics_service", return_value=MagicMock())
     def test_analytics_fail_triggers_reporting(self, mock_svc, mock_clips,
                                                 mock_fetch, mock_update,
                                                 mock_reporting_svc,
@@ -1090,14 +1091,14 @@ class TestSyncStreamerMetrics:
         mock_reach_update.assert_called_once()
         mock_touch.assert_not_called()
 
-    @patch("main.touch_youtube_metrics_sync", create=True)
-    @patch("main.update_youtube_reach_metrics")
-    @patch("main.fetch_reach_metrics")
-    @patch("main.get_reporting_service")
-    @patch("main.update_youtube_metrics")
-    @patch("main.fetch_video_metrics")
-    @patch("main.get_clips_for_metrics")
-    @patch("main.get_analytics_service", return_value=MagicMock())
+    @patch("src.pipeline.touch_youtube_metrics_sync", create=True)
+    @patch("src.pipeline.update_youtube_reach_metrics")
+    @patch("src.pipeline.fetch_reach_metrics")
+    @patch("src.pipeline.get_reporting_service")
+    @patch("src.pipeline.update_youtube_metrics")
+    @patch("src.pipeline.fetch_video_metrics")
+    @patch("src.pipeline.get_clips_for_metrics")
+    @patch("src.pipeline.get_analytics_service", return_value=MagicMock())
     def test_both_apis_fail_no_touch(self, mock_svc, mock_clips,
                                       mock_fetch, mock_update,
                                       mock_reporting_svc,
@@ -1119,14 +1120,14 @@ class TestSyncStreamerMetrics:
         mock_touch.assert_not_called()
         mock_reach_update.assert_not_called()
 
-    @patch("main.touch_youtube_metrics_sync", create=True)
-    @patch("main.update_youtube_reach_metrics")
-    @patch("main.fetch_reach_metrics")
-    @patch("main.get_reporting_service", return_value=MagicMock())
-    @patch("main.update_youtube_metrics")
-    @patch("main.fetch_video_metrics")
-    @patch("main.get_clips_for_metrics")
-    @patch("main.get_analytics_service", return_value=MagicMock())
+    @patch("src.pipeline.touch_youtube_metrics_sync", create=True)
+    @patch("src.pipeline.update_youtube_reach_metrics")
+    @patch("src.pipeline.fetch_reach_metrics")
+    @patch("src.pipeline.get_reporting_service", return_value=MagicMock())
+    @patch("src.pipeline.update_youtube_metrics")
+    @patch("src.pipeline.fetch_video_metrics")
+    @patch("src.pipeline.get_clips_for_metrics")
+    @patch("src.pipeline.get_analytics_service", return_value=MagicMock())
     def test_reporting_api_exception_graceful(self, mock_svc, mock_clips,
                                                mock_fetch, mock_update,
                                                mock_reporting_svc,
@@ -1156,14 +1157,14 @@ class TestSyncStreamerMetrics:
         assert result == 1
         mock_update.assert_called_once()
 
-    @patch("main.touch_youtube_metrics_sync", create=True)
-    @patch("main.update_youtube_reach_metrics")
-    @patch("main.fetch_reach_metrics")
-    @patch("main.get_reporting_service", return_value=MagicMock())
-    @patch("main.update_youtube_metrics")
-    @patch("main.fetch_video_metrics")
-    @patch("main.get_clips_for_metrics")
-    @patch("main.get_analytics_service", return_value=MagicMock())
+    @patch("src.pipeline.touch_youtube_metrics_sync", create=True)
+    @patch("src.pipeline.update_youtube_reach_metrics")
+    @patch("src.pipeline.fetch_reach_metrics")
+    @patch("src.pipeline.get_reporting_service", return_value=MagicMock())
+    @patch("src.pipeline.update_youtube_metrics")
+    @patch("src.pipeline.fetch_video_metrics")
+    @patch("src.pipeline.get_clips_for_metrics")
+    @patch("src.pipeline.get_analytics_service", return_value=MagicMock())
     def test_multiple_videos_mixed_results(self, mock_svc, mock_clips,
                                              mock_fetch, mock_update,
                                              mock_reporting_svc,
@@ -1211,14 +1212,14 @@ class TestSyncStreamerMetrics:
         assert mock_update.call_count == 2  # yt_1 and yt_2
         assert mock_reach_update.call_count == 2  # yt_2 and yt_3
 
-    @patch("main.touch_youtube_metrics_sync", create=True)
-    @patch("main.update_youtube_reach_metrics")
-    @patch("main.fetch_reach_metrics")
-    @patch("main.get_reporting_service", return_value=MagicMock())
-    @patch("main.update_youtube_metrics")
-    @patch("main.fetch_video_metrics")
-    @patch("main.get_clips_for_metrics")
-    @patch("main.get_analytics_service", return_value=MagicMock())
+    @patch("src.pipeline.touch_youtube_metrics_sync", create=True)
+    @patch("src.pipeline.update_youtube_reach_metrics")
+    @patch("src.pipeline.fetch_reach_metrics")
+    @patch("src.pipeline.get_reporting_service", return_value=MagicMock())
+    @patch("src.pipeline.update_youtube_metrics")
+    @patch("src.pipeline.fetch_video_metrics")
+    @patch("src.pipeline.get_clips_for_metrics")
+    @patch("src.pipeline.get_analytics_service", return_value=MagicMock())
     def test_return_count_accuracy(self, mock_svc, mock_clips,
                                     mock_fetch, mock_update,
                                     mock_reporting_svc,
@@ -1284,7 +1285,7 @@ class TestIsWithinPostingWindow:
         result = _is_within_posting_window(None, force_upload=False)
         assert result is True
 
-    @patch("main.datetime")
+    @patch("src.pipeline.datetime")
     def test_weekday_within_window(self, mock_datetime):
         """Weekday at 12:00 CST should be within 11:00-14:00 window."""
         from datetime import datetime
@@ -1306,7 +1307,7 @@ class TestIsWithinPostingWindow:
         result = _is_within_posting_window(schedule, force_upload=False)
         assert result is True
 
-    @patch("main.datetime")
+    @patch("src.pipeline.datetime")
     def test_weekday_outside_window(self, mock_datetime):
         """Weekday at 15:00 CST should be outside all windows."""
         from datetime import datetime
@@ -1328,7 +1329,7 @@ class TestIsWithinPostingWindow:
         result = _is_within_posting_window(schedule, force_upload=False)
         assert result is False
 
-    @patch("main.datetime")
+    @patch("src.pipeline.datetime")
     def test_weekend_within_window(self, mock_datetime):
         """Saturday 09:00 CST should be within 08:00-10:00 weekend window."""
         from datetime import datetime
@@ -1350,7 +1351,7 @@ class TestIsWithinPostingWindow:
         result = _is_within_posting_window(schedule, force_upload=False)
         assert result is True
 
-    @patch("main.datetime")
+    @patch("src.pipeline.datetime")
     def test_weekend_outside_window(self, mock_datetime):
         """Sunday 14:00 CST should be outside all weekend windows."""
         from datetime import datetime
@@ -1372,7 +1373,7 @@ class TestIsWithinPostingWindow:
         result = _is_within_posting_window(schedule, force_upload=False)
         assert result is False
 
-    @patch("main.datetime")
+    @patch("src.pipeline.datetime")
     def test_boundary_start_time(self, mock_datetime):
         """Exactly at window start time (11:00) should be within window."""
         from datetime import datetime
@@ -1391,7 +1392,7 @@ class TestIsWithinPostingWindow:
         result = _is_within_posting_window(schedule, force_upload=False)
         assert result is True
 
-    @patch("main.datetime")
+    @patch("src.pipeline.datetime")
     def test_boundary_end_time(self, mock_datetime):
         """Exactly at window end time (14:00) should be within window."""
         from datetime import datetime
@@ -1410,7 +1411,7 @@ class TestIsWithinPostingWindow:
         result = _is_within_posting_window(schedule, force_upload=False)
         assert result is True
 
-    @patch("main.datetime")
+    @patch("src.pipeline.datetime")
     def test_invalid_timezone_defaults_to_chicago(self, mock_datetime):
         """Invalid timezone should default to America/Chicago."""
         from datetime import datetime
@@ -1433,11 +1434,11 @@ class TestIsWithinPostingWindow:
 class TestProcessStreamerPostingWindow:
     """Integration tests for posting window in _process_streamer."""
 
-    @patch("main._is_within_posting_window", return_value=False)
-    @patch("main.update_streamer_stats")
-    @patch("main.recent_upload_count", return_value=0)
-    @patch("main.filter_new_clips")
-    @patch("main.filter_and_rank")
+    @patch("src.pipeline._is_within_posting_window", return_value=False)
+    @patch("src.pipeline.update_streamer_stats")
+    @patch("src.pipeline.recent_upload_count", return_value=0)
+    @patch("src.pipeline.filter_new_clips")
+    @patch("src.pipeline.filter_and_rank")
     def test_outside_posting_window_skips_upload(self, mock_rank, mock_dedup, mock_recent,
                                                   mock_stats, mock_window, conn, cfg, streamer, log):
         """When outside posting window, uploads should be skipped."""
@@ -1460,13 +1461,13 @@ class TestProcessStreamerPostingWindow:
         assert skip_reason == "outside_posting_window"
         mock_window.assert_called_once()
 
-    @patch("main._is_within_posting_window", return_value=True)
-    @patch("main.update_streamer_stats")
-    @patch("main._process_single_clip", return_value=("uploaded", "yt_1"))
-    @patch("main.get_authenticated_service", return_value=MagicMock())
-    @patch("main.recent_upload_count", return_value=0)
-    @patch("main.filter_new_clips")
-    @patch("main.filter_and_rank")
+    @patch("src.pipeline._is_within_posting_window", return_value=True)
+    @patch("src.pipeline.update_streamer_stats")
+    @patch("src.pipeline._process_single_clip", return_value=("uploaded", "yt_1"))
+    @patch("src.pipeline.get_authenticated_service", return_value=MagicMock())
+    @patch("src.pipeline.recent_upload_count", return_value=0)
+    @patch("src.pipeline.filter_new_clips")
+    @patch("src.pipeline.filter_and_rank")
     def test_within_posting_window_allows_upload(self, mock_rank, mock_dedup, mock_recent,
                                                   mock_auth, mock_process, mock_stats,
                                                   mock_window, conn, cfg, streamer, log):
@@ -1491,13 +1492,13 @@ class TestProcessStreamerPostingWindow:
         assert skip_reason is None
         mock_window.assert_called_once()
 
-    @patch("main._is_within_posting_window", return_value=True)
-    @patch("main.update_streamer_stats")
-    @patch("main._process_single_clip", return_value=("uploaded", "yt_1"))
-    @patch("main.get_authenticated_service", return_value=MagicMock())
-    @patch("main.recent_upload_count", return_value=0)
-    @patch("main.filter_new_clips")
-    @patch("main.filter_and_rank")
+    @patch("src.pipeline._is_within_posting_window", return_value=True)
+    @patch("src.pipeline.update_streamer_stats")
+    @patch("src.pipeline._process_single_clip", return_value=("uploaded", "yt_1"))
+    @patch("src.pipeline.get_authenticated_service", return_value=MagicMock())
+    @patch("src.pipeline.recent_upload_count", return_value=0)
+    @patch("src.pipeline.filter_new_clips")
+    @patch("src.pipeline.filter_and_rank")
     def test_force_upload_bypasses_window(self, mock_rank, mock_dedup, mock_recent,
                                           mock_auth, mock_process, mock_stats,
                                           mock_window, conn, cfg, streamer, log):
