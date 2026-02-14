@@ -31,8 +31,19 @@ streamers:
     output_w: 420
   privacy_status: public
   category_id: '20'
-- name: Clix
-  twitch_id: '233300375'
+- name: xQc
+  twitch_id: '71092938'
+  youtube_credentials: credentials/theburntpeanut_youtube.json
+  facecam:
+    x: 0.75
+    y: 0.60
+    w: 0.22
+    h: 0.35
+    output_w: 420
+  privacy_status: public
+  category_id: '20'
+- name: Jynxzi
+  twitch_id: '135186572'
   youtube_credentials: credentials/theburntpeanut_youtube.json
   facecam:
     x: 0.02
@@ -42,35 +53,24 @@ streamers:
     output_w: 420
   privacy_status: public
   category_id: '20'
-- name: iiTzTimmy
-  twitch_id: '45302947'
+- name: CaseOh_
+  twitch_id: '182771498'
   youtube_credentials: credentials/theburntpeanut_youtube.json
   facecam:
     x: 0.72
     y: 0.02
     w: 0.26
-    h: 0.32
+    h: 0.34
     output_w: 420
   privacy_status: public
   category_id: '20'
-- name: tarik
-  twitch_id: '36340781'
+- name: Summit1g
+  twitch_id: '26490481'
   youtube_credentials: credentials/theburntpeanut_youtube.json
   facecam:
-    x: 0.72
-    y: 0.03
-    w: 0.25
-    h: 0.30
-    output_w: 420
-  privacy_status: public
-  category_id: '20'
-- name: aceu
-  twitch_id: '88946548'
-  youtube_credentials: credentials/theburntpeanut_youtube.json
-  facecam:
-    x: 0.02
-    y: 0.03
-    w: 0.24
+    x: 0.75
+    y: 0.02
+    w: 0.23
     h: 0.30
     output_w: 420
   privacy_status: public
