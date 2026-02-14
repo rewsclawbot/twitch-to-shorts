@@ -5,6 +5,7 @@ import math
 import os
 import re
 import subprocess
+import sys
 
 from src.media_utils import FFMPEG, FFPROBE, is_valid_video, safe_remove
 from src.models import FacecamConfig
@@ -360,7 +361,9 @@ def _run_ffmpeg(input_path: str, output_path: str, vf: str,
     if ss > 0:
         cmd += ["-ss", str(ss)]
 
-    if gpu:
+    use_videotoolbox = gpu and sys.platform == "darwin"
+
+    if gpu and not use_videotoolbox:
         cmd += ["-hwaccel", "cuda"]
 
     cmd += ["-i", input_path]
@@ -384,7 +387,15 @@ def _run_ffmpeg(input_path: str, output_path: str, vf: str,
             cmd[idx + 1] = cmd[idx + 1] + f",ass='{escaped}'"
 
     if gpu:
-        cmd += ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"]
+        if use_videotoolbox:
+            cmd += [
+                "-c:v", "h264_videotoolbox",
+                "-b:v", "5M",
+                "-maxrate", "6M",
+                "-bufsize", "10M",
+            ]
+        else:
+            cmd += ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"]
     else:
         cpu_preset = "fast"
         cmd += ["-c:v", "libx264", "-crf", "20", "-preset", cpu_preset]

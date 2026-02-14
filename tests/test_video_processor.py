@@ -425,6 +425,52 @@ class TestPresetFast:
         assert cmd[preset_idx + 1] == "fast"
 
 
+class TestGpuPlatformEncoding:
+    """Verify GPU backend switches by platform."""
+
+    @patch("src.video_processor.sys.platform", "darwin")
+    @patch("src.video_processor.os.replace")
+    @patch("src.video_processor.os.path.getsize", return_value=1024)
+    @patch("src.video_processor.os.path.exists", return_value=True)
+    @patch("src.video_processor.subprocess.Popen")
+    def test_gpu_uses_videotoolbox_on_macos(self, mock_popen, mock_exists,
+                                            mock_getsize, mock_replace):
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = (b"", b"")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+
+        _run_ffmpeg("in.mp4", "out.mp4", "scale=1080:1920", "test", gpu=True)
+
+        cmd = mock_popen.call_args[0][0]
+        assert "-hwaccel" not in cmd
+        vcodec_idx = cmd.index("-c:v")
+        assert cmd[vcodec_idx + 1] == "h264_videotoolbox"
+        assert "-b:v" in cmd
+        assert "-maxrate" in cmd
+        assert "-bufsize" in cmd
+
+    @patch("src.video_processor.sys.platform", "linux")
+    @patch("src.video_processor.os.replace")
+    @patch("src.video_processor.os.path.getsize", return_value=1024)
+    @patch("src.video_processor.os.path.exists", return_value=True)
+    @patch("src.video_processor.subprocess.Popen")
+    def test_gpu_uses_nvenc_on_linux(self, mock_popen, mock_exists,
+                                     mock_getsize, mock_replace):
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = (b"", b"")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+
+        _run_ffmpeg("in.mp4", "out.mp4", "scale=1080:1920", "test", gpu=True)
+
+        cmd = mock_popen.call_args[0][0]
+        hwaccel_idx = cmd.index("-hwaccel")
+        assert cmd[hwaccel_idx + 1] == "cuda"
+        vcodec_idx = cmd.index("-c:v")
+        assert cmd[vcodec_idx + 1] == "h264_nvenc"
+
+
 class TestLoudnessValidation:
     @patch("src.video_processor.os.replace")
     @patch("src.video_processor.os.path.getsize", return_value=1024)
