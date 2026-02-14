@@ -39,6 +39,7 @@ from src.video_processor import (  # noqa: E402
     detect_leading_silence,
     extract_thumbnail,
     find_peak_action_timestamp,
+    score_visual_quality,
     trim_to_optimal_length,
 )
 from src.youtube_analytics import fetch_video_metrics, get_analytics_service  # noqa: E402
@@ -538,6 +539,7 @@ def _process_single_clip_with_context(clip, context: ProcessingContext):
     Returns a tuple of (result, youtube_id) where result is one of:
         "downloaded_fail" - download failed
         "processed_fail"  - video processing failed
+        "low_visual_quality" - skipped due to low visual quality score
         "dry_run"         - dry run, no upload
         "duplicate"       - already on channel
         "quota_exhausted" - YouTube quota hit
@@ -649,6 +651,19 @@ def _process_single_clip_with_context(clip, context: ProcessingContext):
         increment_fail_count(conn, clip)
         _cleanup_tmp_files(video_path, smart_trim_path, subtitle_path)
         return "processed_fail", None
+
+    min_visual_quality = float(getattr(cfg, "min_visual_quality", 0.3))
+    visual_quality = score_visual_quality(vertical_path)
+    log.info("Visual quality score for %s: %.3f", clip.id, visual_quality)
+    if visual_quality < min_visual_quality:
+        log.info(
+            "Skipping clip %s: visual quality %.3f below threshold %.3f",
+            clip.id,
+            visual_quality,
+            min_visual_quality,
+        )
+        _cleanup_tmp_files(video_path, smart_trim_path, vertical_path, subtitle_path)
+        return "low_visual_quality", None
 
     if peak_action_trim_enabled:
         peak_ts = find_peak_action_timestamp(vertical_path)
@@ -970,6 +985,9 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
             # Downloaded but crop/processing failed
             downloaded += 1
             failed += 1
+        elif result == "low_visual_quality":
+            downloaded += 1
+            processed += 1
         elif result == "dry_run":
             downloaded += 1
             processed += 1

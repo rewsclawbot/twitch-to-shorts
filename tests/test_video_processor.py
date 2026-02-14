@@ -19,6 +19,7 @@ from src.video_processor import (
     detect_visual_dead_frames,
     extract_thumbnail,
     find_peak_action_timestamp,
+    score_visual_quality,
     trim_to_optimal_length,
 )
 
@@ -833,6 +834,71 @@ class TestTrimToOptimalLength:
         output = trim_to_optimal_length("input.mp4", "trimmed.mp4", target_duration=15)
         assert output is None
         mock_remove.assert_called_once_with("trimmed.mp4.tmp")
+
+
+class TestScoreVisualQuality:
+    @patch("src.video_processor._batch_sample_color_variance")
+    @patch("src.video_processor._batch_sample_sobel_edge_density")
+    @patch("src.video_processor._get_duration", return_value=22.0)
+    @patch("src.video_processor.os.path.exists", return_value=True)
+    def test_weighted_score_and_even_sampling(
+        self,
+        mock_exists,
+        mock_duration,
+        mock_edges,
+        mock_color,
+    ):
+        mock_edges.return_value = [0.8] * 10
+        mock_color.return_value = [0.5] * 10
+
+        score = score_visual_quality("vertical.mp4")
+
+        assert score == pytest.approx(0.68)
+        timestamps = mock_edges.call_args[0][1]
+        assert len(timestamps) == 10
+        assert timestamps[0] == pytest.approx(2.0)
+        assert timestamps[-1] == pytest.approx(20.0)
+
+    @patch("src.video_processor._batch_sample_color_variance")
+    @patch("src.video_processor._batch_sample_sobel_edge_density")
+    @patch("src.video_processor._get_duration", return_value=12.0)
+    @patch("src.video_processor.os.path.exists", return_value=False)
+    def test_missing_file_returns_zero(
+        self,
+        mock_exists,
+        mock_duration,
+        mock_edges,
+        mock_color,
+    ):
+        score = score_visual_quality("missing.mp4")
+        assert score == 0.0
+        mock_edges.assert_not_called()
+        mock_color.assert_not_called()
+
+    @patch("src.video_processor._batch_sample_color_variance", return_value=[1.0] * 10)
+    @patch("src.video_processor._batch_sample_sobel_edge_density", return_value=[1.0] * 10)
+    @patch("src.video_processor._get_duration", return_value=10.0)
+    @patch("src.video_processor.os.path.exists", return_value=True)
+    def test_score_clamped_to_one(
+        self,
+        mock_exists,
+        mock_duration,
+        mock_edges,
+        mock_color,
+    ):
+        score = score_visual_quality("vertical.mp4")
+        assert score == 1.0
+
+    @patch("src.video_processor.subprocess.run")
+    def test_edge_sampling_uses_sobel_filter(self, mock_run):
+        from src.video_processor import _batch_sample_sobel_edge_density
+
+        mock_run.return_value = MagicMock(stderr="", returncode=0)
+        _batch_sample_sobel_edge_density("in.mp4", [1.0, 2.0])
+        cmd = mock_run.call_args[0][0]
+        assert isinstance(cmd, list)
+        fc = cmd[cmd.index("-filter_complex") + 1]
+        assert "sobel" in fc
 
 
 class TestLoopCompatibility:

@@ -81,6 +81,7 @@ class PipelineConfig:
     context_overlay: bool = True
     smart_trim: bool = False
     smart_trim_target_duration: int = 15
+    min_visual_quality: float = 0.3
     force_upload: bool = False
     posting_schedule: dict | None = None
 
@@ -114,6 +115,7 @@ class PipelineConfig:
             ("velocity_weight", self.velocity_weight),
             ("title_quality_weight", self.title_quality_weight),
             ("duration_bonus_weight", self.duration_bonus_weight),
+            ("min_visual_quality", self.min_visual_quality),
         ]
         for name, numeric_value in float_fields:
             if not isinstance(numeric_value, (int, float)):
@@ -146,6 +148,11 @@ class PipelineConfig:
             errors.append(
                 "smart_trim_target_duration must be > 0, got "
                 f"{self.smart_trim_target_duration}"
+            )
+        if not 0.0 <= self.min_visual_quality <= 1.0:
+            errors.append(
+                "min_visual_quality must be between 0 and 1, got "
+                f"{self.min_visual_quality}"
             )
 
         if errors:

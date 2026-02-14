@@ -158,6 +158,118 @@ def _batch_sample_ydif(video_path: str, timestamps: list[float]) -> list[float]:
         return [0.0] * n
 
 
+def _extract_signalstats_metric_values(stderr: str, metric: str) -> list[float]:
+    pattern = re.compile(
+        rf"signalstats\.{re.escape(metric)}=([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)"
+    )
+    values: list[float] = []
+    for match in pattern.finditer(stderr):
+        with contextlib.suppress(ValueError):
+            values.append(float(match.group(1)))
+    return values
+
+
+def _batch_sample_sobel_edge_density(video_path: str, timestamps: list[float]) -> list[float]:
+    """Sample normalized Sobel edge density [0,1] at given timestamps."""
+    if not timestamps:
+        return []
+
+    n = len(timestamps)
+    cmd = [FFMPEG]
+    for ts in timestamps:
+        cmd += ["-ss", f"{ts:.2f}", "-i", video_path]
+
+    filters = []
+    for i in range(n):
+        filters.append(f"[{i}:v]format=gray,sobel,signalstats,metadata=print,trim=end_frame=1[v{i}]")
+    concat_inputs = "".join(f"[v{i}]" for i in range(n))
+    filters.append(f"{concat_inputs}concat=n={n}:v=1:a=0[out]")
+    cmd += ["-filter_complex", ";".join(filters), "-map", "[out]", "-f", "null", "-"]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+        yavg_values = _extract_signalstats_metric_values(result.stderr, "YAVG")
+        scores: list[float] = []
+        for i in range(n):
+            raw = yavg_values[i] if i < len(yavg_values) else 0.0
+            scores.append(max(0.0, min(raw / 255.0, 1.0)))
+        return scores
+    except Exception as e:
+        log.warning("Batch Sobel edge sampling failed: %s", e)
+        return [0.0] * n
+
+
+def _batch_sample_color_variance(video_path: str, timestamps: list[float]) -> list[float]:
+    """Sample normalized chroma variance proxy [0,1] at given timestamps."""
+    if not timestamps:
+        return []
+
+    n = len(timestamps)
+    cmd = [FFMPEG]
+    for ts in timestamps:
+        cmd += ["-ss", f"{ts:.2f}", "-i", video_path]
+
+    filters = []
+    for i in range(n):
+        filters.append(f"[{i}:v]signalstats,metadata=print,trim=end_frame=1[v{i}]")
+    concat_inputs = "".join(f"[v{i}]" for i in range(n))
+    filters.append(f"{concat_inputs}concat=n={n}:v=1:a=0[out]")
+    cmd += ["-filter_complex", ";".join(filters), "-map", "[out]", "-f", "null", "-"]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+        umin_values = _extract_signalstats_metric_values(result.stderr, "UMIN")
+        umax_values = _extract_signalstats_metric_values(result.stderr, "UMAX")
+        vmin_values = _extract_signalstats_metric_values(result.stderr, "VMIN")
+        vmax_values = _extract_signalstats_metric_values(result.stderr, "VMAX")
+
+        scores: list[float] = []
+        for i in range(n):
+            if i >= len(umin_values) or i >= len(umax_values) or i >= len(vmin_values) or i >= len(vmax_values):
+                scores.append(0.0)
+                continue
+            u_range = max(0.0, umax_values[i] - umin_values[i])
+            v_range = max(0.0, vmax_values[i] - vmin_values[i])
+            variance_norm = ((u_range * u_range) + (v_range * v_range)) / (2.0 * 255.0 * 255.0)
+            scores.append(max(0.0, min(variance_norm, 1.0)))
+        return scores
+    except Exception as e:
+        log.warning("Batch color variance sampling failed: %s", e)
+        return [0.0] * n
+
+
+def score_visual_quality(video_path: str, samples: int = 10) -> float:
+    """Score visual richness in [0,1] using Sobel edge density and color variance."""
+    if not os.path.exists(video_path):
+        return 0.0
+    if samples <= 0:
+        return 0.0
+
+    duration = _get_duration(video_path)
+    if not duration or duration <= 0:
+        return 0.0
+
+    step = duration / (samples + 1)
+    timestamps = [max(0.1, min(duration - 0.1, step * (i + 1))) for i in range(samples)]
+
+    edge_scores = _batch_sample_sobel_edge_density(video_path, timestamps)
+    color_scores = _batch_sample_color_variance(video_path, timestamps)
+
+    if not edge_scores and not color_scores:
+        return 0.0
+
+    n = len(timestamps)
+    if len(edge_scores) < n:
+        edge_scores = edge_scores + [0.0] * (n - len(edge_scores))
+    if len(color_scores) < n:
+        color_scores = color_scores + [0.0] * (n - len(color_scores))
+
+    edge_avg = sum(edge_scores[:n]) / n
+    color_avg = sum(color_scores[:n]) / n
+    score = 0.6 * edge_avg + 0.4 * color_avg
+    return max(0.0, min(score, 1.0))
+
+
 def extract_thumbnail(
     input_path: str,
     tmp_dir: str,

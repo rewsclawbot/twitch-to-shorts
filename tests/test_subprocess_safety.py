@@ -108,6 +108,35 @@ class TestVideoProcessorSubprocessSafety:
         assert filename in cmd
 
     @pytest.mark.parametrize("filename", ADVERSARIAL_FILENAMES)
+    @patch("src.video_processor.subprocess.run")
+    @patch("src.video_processor._get_duration", return_value=30.0)
+    @patch("src.video_processor.os.path.exists", return_value=True)
+    def test_score_visual_quality_list_args(self, mock_exists, mock_duration, mock_run, filename):
+        from src.video_processor import score_visual_quality
+
+        edge_stderr = "\n".join("signalstats.YAVG=12.0" for _ in range(10))
+        color_lines = []
+        for _ in range(10):
+            color_lines.extend([
+                "signalstats.UMIN=90.0",
+                "signalstats.UMAX=160.0",
+                "signalstats.VMIN=85.0",
+                "signalstats.VMAX=170.0",
+            ])
+        color_stderr = "\n".join(color_lines)
+        mock_run.side_effect = [
+            MagicMock(stderr=edge_stderr, returncode=0),
+            MagicMock(stderr=color_stderr, returncode=0),
+        ]
+
+        score_visual_quality(filename)
+
+        commands = [c[0][0] for c in mock_run.call_args_list if c[0]]
+        assert len(commands) >= 2
+        assert all(isinstance(cmd, list) for cmd in commands), "subprocess must use list args"
+        assert all(filename in cmd for cmd in commands)
+
+    @pytest.mark.parametrize("filename", ADVERSARIAL_FILENAMES)
     @patch("src.video_processor.subprocess.Popen")
     @patch("src.video_processor._measure_loudness", return_value=None)
     @patch("src.video_processor.detect_leading_silence", return_value=0.0)

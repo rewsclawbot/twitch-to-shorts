@@ -44,6 +44,7 @@ def cfg():
         upload_spacing_hours=2,
         max_uploads_per_window=1,
         analytics_enabled=False,
+        min_visual_quality=0.0,
     )
 
 
@@ -118,6 +119,56 @@ class TestProcessSingleClip:
         result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log, dry_run=True)
         assert result == "dry_run"
         assert yt_id is None
+
+    @patch("src.pipeline.score_visual_quality", return_value=0.2)
+    @patch("src.pipeline.detect_leading_silence", return_value=0.0)
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
+    def test_low_visual_quality_skips_upload(
+        self,
+        mock_dl,
+        mock_crop,
+        mock_clean,
+        mock_silence,
+        mock_quality,
+        clip,
+        yt_service,
+        conn,
+        cfg,
+        streamer,
+        log,
+    ):
+        cfg.min_visual_quality = 0.3
+        result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log, dry_run=True)
+        assert result == "low_visual_quality"
+        assert yt_id is None
+        mock_quality.assert_called_once_with("/tmp/test/clip_1_vertical.mp4")
+
+    @patch("src.pipeline.score_visual_quality", return_value=0.8)
+    @patch("src.pipeline.detect_leading_silence", return_value=0.0)
+    @patch("src.pipeline._cleanup_tmp_files")
+    @patch("src.pipeline.crop_to_vertical", return_value="/tmp/test/clip_1_vertical.mp4")
+    @patch("src.pipeline.download_clip", return_value="/tmp/test/clip_1.mp4")
+    def test_visual_quality_above_threshold_continues(
+        self,
+        mock_dl,
+        mock_crop,
+        mock_clean,
+        mock_silence,
+        mock_quality,
+        clip,
+        yt_service,
+        conn,
+        cfg,
+        streamer,
+        log,
+    ):
+        cfg.min_visual_quality = 0.3
+        result, yt_id = self._call(clip, yt_service, conn, cfg, streamer, log, dry_run=True)
+        assert result == "dry_run"
+        assert yt_id is None
+        mock_quality.assert_called_once_with("/tmp/test/clip_1_vertical.mp4")
 
     @patch("src.pipeline.apply_loop_crossfade", return_value=True)
     @patch("src.pipeline.find_peak_action_timestamp", return_value=1.25)
