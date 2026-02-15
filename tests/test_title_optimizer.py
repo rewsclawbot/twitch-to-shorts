@@ -1,4 +1,5 @@
 import random
+import subprocess
 from unittest.mock import MagicMock, patch
 
 from src.title_optimizer import (
@@ -80,14 +81,17 @@ def test_rewrite_title_with_llm_success():
     mock_client.chat.completions.create.return_value = mock_response
 
     with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}, clear=True):
-        with patch("src.title_optimizer.OpenAI", return_value=mock_client) as mock_openai:
-            result = _rewrite_title_with_llm("lol", "streamer", "Valorant")
+        with patch("src.title_optimizer.subprocess") as mock_sub:
+            mock_sub.run.side_effect = FileNotFoundError("claude not found")
+            mock_sub.TimeoutExpired = subprocess.TimeoutExpired
+            with patch("src.title_optimizer.OpenAI", return_value=mock_client) as mock_openai:
+                result = _rewrite_title_with_llm("lol", "streamer", "Valorant")
 
     assert result == "BIG WIN MOMENT! 🔥"
     mock_openai.assert_called_once_with(api_key="test-key")
     kwargs = mock_client.chat.completions.create.call_args.kwargs
     assert kwargs["model"] == "gpt-4o-mini"
-    assert kwargs["timeout"] == 10
+    assert kwargs["timeout"] == 8
     assert kwargs["messages"][0]["role"] == "system"
     assert "YouTube Shorts" in kwargs["messages"][0]["content"]
 
@@ -106,8 +110,11 @@ def test_rewrite_title_with_local_llm_success():
         },
         clear=True,
     ):
-        with patch("src.title_optimizer.OpenAI", return_value=mock_client) as mock_openai:
-            result = _rewrite_title_with_llm("lol", "streamer", "Valorant")
+        with patch("src.title_optimizer.subprocess") as mock_sub:
+            mock_sub.run.side_effect = FileNotFoundError("claude not found")
+            mock_sub.TimeoutExpired = subprocess.TimeoutExpired
+            with patch("src.title_optimizer.OpenAI", return_value=mock_client) as mock_openai:
+                result = _rewrite_title_with_llm("lol", "streamer", "Valorant")
 
     assert result == "LOCAL TITLE OK"
     mock_openai.assert_called_once_with(
@@ -123,13 +130,16 @@ def test_rewrite_title_with_llm_failure():
     mock_client.chat.completions.create.side_effect = RuntimeError("api error")
 
     with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}, clear=True):
-        with patch("src.title_optimizer.OpenAI", return_value=mock_client):
-            with patch("src.title_optimizer.time.sleep") as mock_sleep:
-                result = _rewrite_title_with_llm("lol", "streamer", "game")
+        with patch("src.title_optimizer.subprocess") as mock_sub:
+            mock_sub.run.side_effect = FileNotFoundError("claude not found")
+            mock_sub.TimeoutExpired = subprocess.TimeoutExpired
+            with patch("src.title_optimizer.OpenAI", return_value=mock_client):
+                with patch("src.title_optimizer.time.sleep") as mock_sleep:
+                    result = _rewrite_title_with_llm("lol", "streamer", "game")
 
-    assert result is None
+    # Template fallback kicks in when all LLMs fail
+    assert result is not None
     assert mock_client.chat.completions.create.call_count == 2
-    mock_sleep.assert_called_once_with(2)
 
 
 def test_rewrite_title_with_llm_timeout():
@@ -137,13 +147,16 @@ def test_rewrite_title_with_llm_timeout():
     mock_client.chat.completions.create.side_effect = TimeoutError("timed out")
 
     with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}, clear=True):
-        with patch("src.title_optimizer.OpenAI", return_value=mock_client):
-            with patch("src.title_optimizer.time.sleep") as mock_sleep:
-                result = _rewrite_title_with_llm("lol", "streamer", "game")
+        with patch("src.title_optimizer.subprocess") as mock_sub:
+            mock_sub.run.side_effect = FileNotFoundError("claude not found")
+            mock_sub.TimeoutExpired = subprocess.TimeoutExpired
+            with patch("src.title_optimizer.OpenAI", return_value=mock_client):
+                with patch("src.title_optimizer.time.sleep") as mock_sleep:
+                    result = _rewrite_title_with_llm("lol", "streamer", "game")
 
-    assert result is None
+    # Template fallback kicks in when all LLMs fail
+    assert result is not None
     assert mock_client.chat.completions.create.call_count == 2
-    mock_sleep.assert_called_once_with(2)
 
 
 def test_optimize_title_truncation():
