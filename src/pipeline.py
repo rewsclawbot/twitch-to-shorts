@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from src.clip_filter import filter_and_rank  # noqa: E402
+from src.clip_filter import filter_and_rank, score_clip_audio  # noqa: E402
 from src.db import (  # noqa: E402
     get_clips_for_metrics,
     get_connection,
@@ -876,6 +876,7 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
         view_transform=cfg.view_transform,
         title_quality_weight=cfg.title_quality_weight,
         duration_bonus_weight=cfg.duration_bonus_weight,
+        audio_excitement_weight=cfg.audio_excitement_weight,
         optimal_duration_min=cfg.optimal_duration_min,
         optimal_duration_max=cfg.optimal_duration_max,
         analytics_enabled=cfg.analytics_enabled,
@@ -918,6 +919,36 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
         game_names = {}
     for c in new_clips:
         c.game_name = game_names.get(c.game_id, "")
+
+    # Score audio excitement for downloaded clips (if enabled)
+    if cfg.audio_excitement_weight > 0 and new_clips:
+        log.info("Scoring audio excitement for %d clips", len(new_clips))
+        from src.downloader import download_clip
+        
+        # Download and score all clips
+        for clip in new_clips:
+            video_path = download_clip(clip, cfg.tmp_dir)
+            if video_path:
+                score_clip_audio(clip, video_path, cfg.tmp_dir)
+            else:
+                log.warning("Failed to download %s for audio scoring", clip.id)
+                clip.audio_score = 0.0  # type: ignore[attr-defined]
+        
+        # Re-rank clips with audio scores included
+        new_clips = filter_and_rank(
+            conn, new_clips, name,
+            velocity_weight=cfg.velocity_weight,
+            min_view_count=0,  # Already filtered
+            age_decay=cfg.age_decay,
+            view_transform=cfg.view_transform,
+            title_quality_weight=cfg.title_quality_weight,
+            duration_bonus_weight=cfg.duration_bonus_weight,
+            audio_excitement_weight=cfg.audio_excitement_weight,
+            optimal_duration_min=cfg.optimal_duration_min,
+            optimal_duration_max=cfg.optimal_duration_max,
+            analytics_enabled=cfg.analytics_enabled,
+        )
+        log.info("Re-ranked %d clips with audio scores", len(new_clips))
 
     yt_service = None
     if not dry_run:
