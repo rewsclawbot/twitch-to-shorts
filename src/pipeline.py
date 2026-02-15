@@ -21,6 +21,7 @@ from src.db import (  # noqa: E402
     update_streamer_stats,
     update_youtube_metrics,
     update_youtube_reach_metrics,
+    upsert_clip_metadata,
 )
 from src.dedup import filter_new_clips  # noqa: E402
 from src.downloader import download_clip  # noqa: E402
@@ -203,15 +204,22 @@ def _sync_streamer_metrics(
         except Exception:
             log.warning("Analytics metrics failed for %s", youtube_id, exc_info=True)
             metrics = None
-        
-        # Fallback to Data API for basic metrics if Analytics has no data yet
-        if metrics is None:
+
+        # Fallback to Data API if Analytics has no data OR if yt_views is null
+        # (Analytics may return successfully but with null views for very new videos)
+        if metrics is None or metrics.get("yt_views") is None:
             try:
-                metrics = fetch_video_metrics_from_data_api(
+                data_api_metrics = fetch_video_metrics_from_data_api(
                     client_secrets_file, credentials_file, youtube_id
                 )
-                if metrics:
+                if data_api_metrics:
                     data_api_fallback += 1
+                    # If Analytics returned partial data, merge with Data API results
+                    if metrics is not None:
+                        # Keep Analytics data for fields Data API doesn't provide
+                        data_api_metrics.update({k: v for k, v in metrics.items()
+                                                if v is not None and k not in data_api_metrics})
+                    metrics = data_api_metrics
             except Exception:
                 log.warning("Data API fallback failed for %s", youtube_id, exc_info=True)
         
@@ -926,6 +934,11 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
     new_clips = new_clips[:cfg.max_clips_per_streamer]
     filtered = len(new_clips)
     log.info("%d new clips after dedup (from %d ranked)", len(new_clips), len(ranked))
+
+    # Persist clip metadata to DB even if we're outside posting window
+    # This avoids re-fetching and re-ranking the same clips on every run
+    for clip in new_clips:
+        upsert_clip_metadata(conn, clip)
 
     if not new_clips:
         skip_reason = "no_new_clips"
