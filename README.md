@@ -1,6 +1,6 @@
 # Twitch-to-Shorts
 
-Automated pipeline: Twitch clips → score → dedup → download → 9:16 crop → YouTube Shorts upload. Runs on GitHub Actions cron (every 4h) or locally. ~3,300 lines Python, 14 source files, 304 tests.
+Automated pipeline: Twitch clips → score → dedup → download → 9:16 crop → YouTube Shorts upload. Runs locally via OpenClaw cron (every 2h). ~7,800 lines Python, 20+ source files, 540 tests.
 
 ## Agent Quick Start
 
@@ -25,11 +25,21 @@ This README is designed as your primary orientation doc — it covers the full a
 | `src/downloader.py` | 105 | yt-dlp wrapper: URL allowlist, atomic rename, handles TS→MP4 remux path variance |
 | `src/video_processor.py` | 463 | ffmpeg: center crop or facecam+gameplay composite, YDIF-based facecam detection, 2-pass EBU R128 loudnorm, thumbnail extraction, GPU/CPU fallback, leading silence trim |
 | `src/captioner.py` | 269 | Deepgram Nova-2 STT → ASS subtitles. Burned-in captions. Optional (needs `deepgram-sdk` + `DEEPGRAM_API_KEY`) |
-| `src/youtube_uploader.py` | 445 | YouTube Data API v3: OAuth, resumable upload, A/B title templates, channel dedup via `playlistItems.list`, thumbnail set |
-| `src/youtube_analytics.py` | 131 | YouTube Analytics API: per-video views/watch time/retention/reach, retry, shared `_to_int`/`_to_float`/`_normalize_ctr` |
+| `src/youtube_uploader.py` | 724 | YouTube Data API v3: OAuth, resumable upload, A/B title templates, channel dedup, thumbnail set, game-specific hashtags, LLM description optimization |
+| `src/youtube_analytics.py` | 165 | YouTube Analytics API + Data API fallback: per-video views/watch time/retention/reach metrics |
 | `src/youtube_reporting.py` | 285 | YouTube Reporting API: bulk CSV download for reach metrics (impressions + CTR), fallback when Analytics API lacks reach |
+| `src/audio_scorer.py` | 450 | Audio excitement scoring: RMS energy, volume spikes, speech density (Whisper), audio variance → 0-1 score |
+| `src/engagement.py` | 106 | First comment system: auto-posts engagement-boosting comments after upload (10 templates) |
+| `src/title_optimizer.py` | 208 | Title optimization: Claude CLI → local LLM → template fallback. Always returns an optimized title. |
+| `src/thumbnail_enhancer.py` | 183 | Thumbnail text overlay with game name and impact words |
+| `src/instagram_uploader.py` | 598 | Instagram Reels cross-posting (optional) |
 | `src/media_utils.py` | 63 | Shared constants (`FFMPEG`, `FFPROBE`), `is_valid_video()`, `safe_remove()`, `extract_audio()` |
 | `sync_db.py` | 69 | Downloads CI database artifact locally via `gh run download` — **run before local pipeline** |
+| `scripts/self_improve.py` | 277 | Self-improvement loop: analyzes analytics → recommends config changes → auto-applies medium+ confidence |
+| `scripts/streamer_health.py` | 109 | Streamer health checker: flags inactive streamers, recommends replacements from backup pool |
+| `scripts/auto_tune.py` | 206 | Analytics-based parameter tuning: title variants, duration, streamer performance |
+| `scripts/metrics_summary.py` | 191 | Generates markdown report of upload metrics, title variants, analytics |
+| `scripts/rebrand_channel.py` | 97 | Re-authenticate with full scopes and rebrand channel name/description |
 
 ## Read Order for New Agents
 
