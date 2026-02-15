@@ -116,6 +116,4 @@ pipeline:
         end: '21:00'
     weekend_windows:
       - start: '09:00'
-        end: '15:00'
-      - start: '17:00'
         end: '21:00'
