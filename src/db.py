@@ -162,16 +162,21 @@ def recent_upload_count(
     hours: int = 4,
     channel_key: str | None = None,
 ) -> int:
-    """Count clips uploaded for a streamer/channel within the last N hours."""
+    """Count clips uploaded for a specific streamer within the last N hours.
+    
+    Counts only uploads for the given streamer, even if multiple streamers
+    share the same YouTube channel (channel_key).
+    """
     cutoff = (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
     if channel_key:
         row = conn.execute(
             """SELECT COUNT(*) as cnt
                FROM clips
-               WHERE posted_at >= ?
+               WHERE streamer = ?
+                 AND posted_at >= ?
                  AND youtube_id IS NOT NULL
-                 AND (channel_key = ? OR (channel_key IS NULL AND streamer = ?))""",
-            (cutoff, channel_key, streamer),
+                 AND (channel_key = ? OR channel_key IS NULL)""",
+            (streamer, cutoff, channel_key),
         ).fetchone()
     else:
         row = conn.execute(
