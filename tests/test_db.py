@@ -23,6 +23,7 @@ from src.db import (
     update_streamer_stats,
     update_youtube_metrics,
     update_youtube_reach_metrics,
+    upsert_clip_metadata,
     vod_overlaps,
 )
 from tests.conftest import make_clip
@@ -818,3 +819,139 @@ class TestInsertClipWithInstagramId:
         insert_clip(conn, clip2)
         row = conn.execute("SELECT instagram_id FROM clips WHERE clip_id = 'ig_ins_2'").fetchone()
         assert row["instagram_id"] == "ig_1"  # preserved
+
+
+class TestUpsertClipMetadata:
+    """Tests for upsert_clip_metadata — persist clips fetched from Twitch without uploading."""
+
+    def test_inserts_new_clip_without_youtube_id(self, conn):
+        """Should insert basic metadata without setting youtube_id or processing fields."""
+        clip = make_clip(clip_id="meta_1", title="Fetched Clip", view_count=500, game_name="Valorant")
+        upsert_clip_metadata(conn, clip)
+
+        row = conn.execute("SELECT * FROM clips WHERE clip_id = 'meta_1'").fetchone()
+        assert row["title"] == "Fetched Clip"
+        assert row["view_count"] == 500
+        assert row["game_name"] == "Valorant"
+        assert row["youtube_id"] is None  # Not uploaded yet
+        assert row["posted_at"] is None  # Not uploaded yet
+
+    def test_updates_view_count_on_conflict(self, conn):
+        """Re-upserting should update view_count with newer value."""
+        clip1 = make_clip(clip_id="meta_2", view_count=100)
+        upsert_clip_metadata(conn, clip1)
+
+        clip2 = make_clip(clip_id="meta_2", view_count=250)
+        upsert_clip_metadata(conn, clip2)
+
+        row = conn.execute("SELECT view_count FROM clips WHERE clip_id = 'meta_2'").fetchone()
+        assert row["view_count"] == 250
+
+    def test_updates_title_on_conflict(self, conn):
+        """Re-upserting should update title with newer value."""
+        clip1 = make_clip(clip_id="meta_3", title="Old Title")
+        upsert_clip_metadata(conn, clip1)
+
+        clip2 = make_clip(clip_id="meta_3", title="Updated Title")
+        upsert_clip_metadata(conn, clip2)
+
+        row = conn.execute("SELECT title FROM clips WHERE clip_id = 'meta_3'").fetchone()
+        assert row["title"] == "Updated Title"
+
+    def test_preserves_existing_youtube_id(self, conn):
+        """Should NOT overwrite youtube_id if clip was already uploaded."""
+        clip = make_clip(clip_id="meta_4", youtube_id="yt_existing")
+        insert_clip(conn, clip)
+
+        # Re-upsert metadata without youtube_id
+        clip_update = make_clip(clip_id="meta_4", view_count=999)
+        upsert_clip_metadata(conn, clip_update)
+
+        row = conn.execute("SELECT youtube_id, view_count FROM clips WHERE clip_id = 'meta_4'").fetchone()
+        assert row["youtube_id"] == "yt_existing"  # preserved
+        assert row["view_count"] == 999  # updated
+
+    def test_preserves_existing_posted_at(self, conn):
+        """Should NOT overwrite posted_at if clip was already uploaded."""
+        clip = make_clip(clip_id="meta_5", youtube_id="yt_5")
+        insert_clip(conn, clip)
+
+        original_posted = conn.execute("SELECT posted_at FROM clips WHERE clip_id = 'meta_5'").fetchone()["posted_at"]
+        assert original_posted is not None
+
+        # Re-upsert metadata
+        clip_update = make_clip(clip_id="meta_5", view_count=777)
+        upsert_clip_metadata(conn, clip_update)
+
+        row = conn.execute("SELECT posted_at FROM clips WHERE clip_id = 'meta_5'").fetchone()
+        assert row["posted_at"] == original_posted  # preserved
+
+    def test_stores_vod_fields(self, conn):
+        """Should persist vod_id, vod_offset, and duration."""
+        clip = make_clip(clip_id="meta_vod", vod_id="vod_789", vod_offset=300, duration=25)
+        upsert_clip_metadata(conn, clip)
+
+        row = conn.execute("SELECT vod_id, vod_offset, duration FROM clips WHERE clip_id = 'meta_vod'").fetchone()
+        assert row["vod_id"] == "vod_789"
+        assert row["vod_offset"] == 300
+        assert row["duration"] == 25
+
+    def test_updates_game_name_when_provided(self, conn):
+        """Should update game_name with newer value when provided."""
+        clip1 = make_clip(clip_id="meta_6", game_name="")
+        upsert_clip_metadata(conn, clip1)
+
+        clip2 = make_clip(clip_id="meta_6", game_name="Apex Legends")
+        upsert_clip_metadata(conn, clip2)
+
+        row = conn.execute("SELECT game_name FROM clips WHERE clip_id = 'meta_6'").fetchone()
+        assert row["game_name"] == "Apex Legends"
+
+    def test_preserves_game_name_when_empty_string(self, conn):
+        """Should NOT overwrite existing game_name with empty string."""
+        clip1 = make_clip(clip_id="meta_7", game_name="Fortnite")
+        upsert_clip_metadata(conn, clip1)
+
+        clip2 = make_clip(clip_id="meta_7", game_name="")
+        upsert_clip_metadata(conn, clip2)
+
+        row = conn.execute("SELECT game_name FROM clips WHERE clip_id = 'meta_7'").fetchone()
+        assert row["game_name"] == "Fortnite"  # preserved
+
+    def test_does_not_set_title_variant(self, conn):
+        """upsert_clip_metadata should NOT set title_variant (upload-time field)."""
+        clip = make_clip(clip_id="meta_8", title_variant="template_1")
+        upsert_clip_metadata(conn, clip)
+
+        row = conn.execute("SELECT title_variant FROM clips WHERE clip_id = 'meta_8'").fetchone()
+        # title_variant is only set during insert_clip or record_known_clip
+        assert row["title_variant"] is None or row["title_variant"] == ""
+
+    def test_clip_eligible_for_upload_after_metadata_insert(self, conn):
+        """Clips with only metadata (no youtube_id) should remain eligible for upload."""
+        from src.dedup import filter_new_clips
+
+        clip = make_clip(clip_id="meta_eligible", view_count=500)
+        upsert_clip_metadata(conn, clip)
+
+        # Check that clip is NOT filtered out by filter_new_clips
+        candidates = [make_clip(clip_id="meta_eligible", view_count=500)]
+        result = filter_new_clips(conn, candidates)
+
+        # Since youtube_id IS NULL, clip should still be eligible
+        assert len(result) == 1
+        assert result[0].id == "meta_eligible"
+
+    def test_uploaded_clip_not_eligible_after_insert_clip(self, conn):
+        """Clips with youtube_id should NOT be eligible after insert_clip."""
+        from src.dedup import filter_new_clips
+
+        clip = make_clip(clip_id="meta_uploaded", youtube_id="yt_meta")
+        insert_clip(conn, clip)
+
+        # Try to filter the same clip
+        candidates = [make_clip(clip_id="meta_uploaded")]
+        result = filter_new_clips(conn, candidates)
+
+        # Clip has youtube_id, so should be filtered out
+        assert len(result) == 0
