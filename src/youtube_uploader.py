@@ -338,14 +338,73 @@ def optimize_description(title: str, game_name: str, streamer_name: str) -> str 
     return None
 
 
+def _get_game_hashtags(game_name: str) -> list[str]:
+    """Return game-specific hashtags for better discoverability."""
+    if not game_name:
+        return []
+    
+    # Mapping of common games to their best-performing hashtag sets
+    game_tags: dict[str, list[str]] = {
+        "fortnite": ["#fortnite", "#fortniteclips", "#fortnitewin", "#battleroyale"],
+        "valorant": ["#valorant", "#valorantclips", "#valoranthighlights", "#fps"],
+        "apex legends": ["#apexlegends", "#apex", "#apexclips", "#battleroyale"],
+        "league of legends": ["#leagueoflegends", "#lol", "#lolclips", "#esports"],
+        "overwatch 2": ["#overwatch2", "#overwatch", "#ow2", "#ow2clips"],
+        "call of duty": ["#callofduty", "#cod", "#codclips", "#warzone"],
+        "minecraft": ["#minecraft", "#minecraftclips", "#minecraftshorts"],
+        "gta v": ["#gtav", "#gta5", "#gtaonline", "#gtaclips"],
+        "counter-strike 2": ["#cs2", "#counterstrike", "#cs2clips", "#fps"],
+        "arc raiders": ["#arcraiders", "#arcraidersgame", "#newgame"],
+        "rocket league": ["#rocketleague", "#rlclips", "#rocketleagueclips"],
+        "dead by daylight": ["#deadbydaylight", "#dbd", "#dbdclips"],
+        "elden ring": ["#eldenring", "#fromsoftware", "#eldenringclips"],
+        "just chatting": ["#justchatting", "#streamer", "#funny", "#reaction"],
+    }
+    
+    name_lower = game_name.lower().strip()
+    tags = game_tags.get(name_lower, [])
+    if not tags:
+        # Fallback: generate game-specific hashtag from the name
+        game_tag = _as_hashtag(game_name)
+        if game_tag:
+            tags = [game_tag, f"{game_tag}clips"]
+    return tags
+
+
 def _ensure_description_hashtags(description: str, clip: Clip) -> str:
     normalized = description or ""
     lower = normalized.lower()
-    game_hashtag = _as_hashtag(clip.game_name)
-    required = ["#shorts", "#gaming"]
-    if game_hashtag:
-        required.append(game_hashtag)
-    missing = [tag for tag in required if tag not in lower]
+    
+    # Core required hashtags
+    required = ["#shorts", "#gaming", "#twitchclips"]
+    
+    # Add streamer-specific hashtag
+    streamer_hashtag = _as_hashtag(clip.streamer)
+    if streamer_hashtag:
+        required.append(streamer_hashtag)
+    
+    # Add game-specific hashtags (up to 2 extras)
+    game_tags = _get_game_hashtags(clip.game_name or "")
+    game_tag_main = _as_hashtag(clip.game_name)
+    if game_tag_main:
+        required.append(game_tag_main)
+    for tag in game_tags[:2]:
+        if tag.lower() not in [r.lower() for r in required]:
+            required.append(tag)
+    
+    # Add engagement/discoverability hashtags
+    required.extend(["#gamingclips", "#viral"])
+    
+    # Dedupe and limit (YouTube allows up to 15 hashtags in description, 3 shown)
+    seen = set()
+    deduped = []
+    for tag in required:
+        if tag.lower() not in seen:
+            seen.add(tag.lower())
+            deduped.append(tag)
+    required = deduped[:10]  # Cap at 10 hashtags
+    
+    missing = [tag for tag in required if tag.lower() not in lower]
     if missing:
         normalized = (normalized + "\n\n" if normalized else "") + " ".join(missing)
     if "credit:" not in normalized.lower():
