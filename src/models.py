@@ -86,6 +86,7 @@ class PipelineConfig:
     min_visual_quality: float = 0.3
     force_upload: bool = False
     posting_schedule: dict | None = None
+    trending_boost_enabled: bool = False
 
     def __post_init__(self):
         errors: list[str] = []
@@ -138,6 +139,7 @@ class PipelineConfig:
         self.context_overlay = bool(self.context_overlay)
         self.smart_trim = bool(self.smart_trim)
         self.force_upload = bool(self.force_upload)
+        self.trending_boost_enabled = bool(self.trending_boost_enabled)
 
         if self.age_decay not in ("linear", "log"):
             errors.append(f"age_decay must be 'linear' or 'log', got {self.age_decay!r}")

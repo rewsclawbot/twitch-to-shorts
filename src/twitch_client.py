@@ -12,6 +12,7 @@ log = logging.getLogger(__name__)
 TOKEN_URL = "https://id.twitch.tv/oauth2/token"
 CLIPS_URL = "https://api.twitch.tv/helix/clips"
 GAMES_URL = "https://api.twitch.tv/helix/games"
+TOP_GAMES_URL = "https://api.twitch.tv/helix/games/top"
 DEFAULT_TIMEOUT = (5, 15)
 
 
@@ -95,6 +96,33 @@ class TwitchClient:
             for g in resp.json().get("data", []):
                 result[g["id"]] = g["name"]
         return result
+
+    def get_top_games(self, limit: int = 20) -> list[dict]:
+        """Get top trending games from Twitch.
+        
+        Args:
+            limit: Number of top games to fetch (max 100)
+            
+        Returns:
+            List of dicts with keys: id, name, rank (1-indexed)
+        """
+        if limit <= 0 or limit > 100:
+            raise ValueError("limit must be between 1 and 100")
+        
+        params = {"first": limit}
+        resp = self._request("GET", TOP_GAMES_URL, params=params)
+        data = resp.json()
+        
+        games = []
+        for rank, game in enumerate(data.get("data", []), start=1):
+            games.append({
+                "id": game["id"],
+                "name": game["name"],
+                "rank": rank,
+            })
+        
+        log.info("Fetched top %d games from Twitch", len(games))
+        return games
 
     def fetch_clips(self, broadcaster_id: str, lookback_hours: int = 24, max_clips: int = 500) -> list[Clip]:
         """Fetch all clips for a broadcaster in the given time window."""

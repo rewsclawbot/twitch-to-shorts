@@ -1,0 +1,15 @@
+{
+  "timestamp": 1771197464.796523,
+  "games": [
+    {
+      "id": "1",
+      "name": "League of Legends",
+      "rank": 1
+    },
+    {
+      "id": "2",
+      "name": "Fortnite",
+      "rank": 2
+    }
+  ]
+}

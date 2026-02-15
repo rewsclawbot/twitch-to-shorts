@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from src.clip_filter import filter_and_rank, score_clip_audio  # noqa: E402
 from src.hook_detector import score_hook_strength  # noqa: E402
+from src.trending import get_trending_multipliers  # noqa: E402
 from src.db import (  # noqa: E402
     get_clips_for_metrics,
     get_connection,
@@ -877,7 +878,7 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
                       extra_tags_global, thumbnail_enabled, thumbnail_samples,
                       thumbnail_width, captions_enabled=False,
                       ig_caption_template=None, ig_caption_templates=None,
-                      ig_hashtags=None):
+                      ig_hashtags=None, trending_multipliers=None):
     """Process all clips for a single streamer.
 
     Returns a tuple of
@@ -943,6 +944,7 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
         optimal_duration_min=cfg.optimal_duration_min,
         optimal_duration_max=cfg.optimal_duration_max,
         analytics_enabled=cfg.analytics_enabled,
+        trending_multipliers=trending_multipliers,
     )
 
     new_clips = filter_new_clips(conn, ranked)
@@ -1037,6 +1039,7 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
             optimal_duration_min=cfg.optimal_duration_min,
             optimal_duration_max=cfg.optimal_duration_max,
             analytics_enabled=cfg.analytics_enabled,
+            trending_multipliers=trending_multipliers,
         )
         log.info("Re-ranked %d clips with audio scores", len(new_clips))
 
@@ -1215,6 +1218,16 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
     if expired_count > 0:
         log.info("Expired %d old queued clips (>72h)", expired_count)
     
+    # Fetch trending games once per pipeline run (if enabled)
+    trending_multipliers = None
+    if cfg.trending_boost_enabled:
+        try:
+            trending_multipliers = get_trending_multipliers(twitch)
+            if trending_multipliers:
+                log.info("Loaded %d trending game multipliers", len(trending_multipliers))
+        except Exception:
+            log.exception("Failed to fetch trending multipliers, continuing without")
+    
     streamer_results = []
 
     def _totals() -> dict:
@@ -1238,6 +1251,7 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
                 ig_caption_template=ig_caption_template,
                 ig_caption_templates=ig_caption_templates,
                 ig_hashtags=ig_hashtags,
+                trending_multipliers=trending_multipliers,
             )
             total_fetched += fetched
             total_filtered += filtered

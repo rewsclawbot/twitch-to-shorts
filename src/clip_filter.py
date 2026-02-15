@@ -79,6 +79,7 @@ def compute_score(
     optimal_duration_min: int = 14,
     optimal_duration_max: int = 31,
     game_multipliers: dict[str, float] | None = None,
+    trending_multipliers: dict[str, float] | None = None,
 ) -> float:
     created = datetime.fromisoformat(clip.created_at)
     age_hours = max((datetime.now(UTC) - created).total_seconds() / 3600, 0.1)
@@ -114,6 +115,17 @@ def compute_score(
             multiplier = game_multipliers.get(game_name)
             if isinstance(multiplier, (int, float)) and multiplier > 0:
                 score *= float(multiplier)
+    if trending_multipliers:
+        game_name = (clip.game_name or "").strip()
+        if game_name:
+            # Case-insensitive lookup
+            multiplier = None
+            for key, value in trending_multipliers.items():
+                if key.lower().strip() == game_name.lower():
+                    multiplier = value
+                    break
+            if multiplier and isinstance(multiplier, (int, float)) and multiplier > 0:
+                score *= float(multiplier)
     return score
 
 
@@ -132,6 +144,7 @@ def filter_and_rank(
     optimal_duration_min: int = 14,
     optimal_duration_max: int = 31,
     analytics_enabled: bool = False,
+    trending_multipliers: dict[str, float] | None = None,
 ) -> list[Clip]:
     """Score and rank all clips that pass the quality floor. Returns all passing clips sorted by score."""
     if not clips:
@@ -165,6 +178,7 @@ def filter_and_rank(
             optimal_duration_min=optimal_duration_min,
             optimal_duration_max=optimal_duration_max,
             game_multipliers=game_multipliers,
+            trending_multipliers=trending_multipliers,
         )
         if streamer_multiplier != 1.0:
             c.score *= streamer_multiplier
