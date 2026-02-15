@@ -13,6 +13,8 @@ TOKEN_URL = "https://id.twitch.tv/oauth2/token"
 CLIPS_URL = "https://api.twitch.tv/helix/clips"
 GAMES_URL = "https://api.twitch.tv/helix/games"
 TOP_GAMES_URL = "https://api.twitch.tv/helix/games/top"
+STREAMS_URL = "https://api.twitch.tv/helix/streams"
+USERS_URL = "https://api.twitch.tv/helix/users"
 DEFAULT_TIMEOUT = (5, 15)
 
 
@@ -123,6 +125,69 @@ class TwitchClient:
         
         log.info("Fetched top %d games from Twitch", len(games))
         return games
+
+    def get_streams(self, game_id: str | None = None, first: int = 20) -> list[dict]:
+        """Get currently live streams, optionally filtered by game.
+        
+        Args:
+            game_id: Optional game ID to filter streams
+            first: Number of streams to fetch (max 100)
+            
+        Returns:
+            List of dicts with keys: user_id, user_login, user_name, game_id, 
+            game_name, viewer_count, started_at, language, title
+        """
+        if first <= 0 or first > 100:
+            raise ValueError("first must be between 1 and 100")
+        
+        params = {"first": first}
+        if game_id:
+            params["game_id"] = game_id
+        
+        resp = self._request("GET", STREAMS_URL, params=params)
+        data = resp.json()
+        
+        streams = []
+        for stream in data.get("data", []):
+            streams.append({
+                "user_id": stream["user_id"],
+                "user_login": stream["user_login"],
+                "user_name": stream["user_name"],
+                "game_id": stream["game_id"],
+                "game_name": stream["game_name"],
+                "viewer_count": stream["viewer_count"],
+                "started_at": stream["started_at"],
+                "language": stream["language"],
+                "title": stream["title"],
+            })
+        
+        log.info("Fetched %d live streams", len(streams))
+        return streams
+
+    def get_user_by_login(self, login: str) -> dict | None:
+        """Get user info by login name.
+        
+        Args:
+            login: Twitch username
+            
+        Returns:
+            Dict with user info or None if not found
+        """
+        params = {"login": login}
+        resp = self._request("GET", USERS_URL, params=params)
+        data = resp.json()
+        
+        users = data.get("data", [])
+        if not users:
+            return None
+        
+        return {
+            "id": users[0]["id"],
+            "login": users[0]["login"],
+            "display_name": users[0]["display_name"],
+            "profile_image_url": users[0].get("profile_image_url", ""),
+            "view_count": users[0].get("view_count", 0),
+        }
 
     def fetch_clips(self, broadcaster_id: str, lookback_hours: int = 24, max_clips: int = 500) -> list[Clip]:
         """Fetch all clips for a broadcaster in the given time window."""
