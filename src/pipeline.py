@@ -42,7 +42,11 @@ from src.video_processor import (  # noqa: E402
     score_visual_quality,
     trim_to_optimal_length,
 )
-from src.youtube_analytics import fetch_video_metrics, get_analytics_service  # noqa: E402
+from src.youtube_analytics import (  # noqa: E402
+    fetch_video_metrics,
+    fetch_video_metrics_from_data_api,
+    get_analytics_service,
+)
 from src.youtube_reporting import fetch_reach_metrics, get_reporting_service  # noqa: E402
 from src.youtube_uploader import (  # noqa: E402
     AuthenticationError,
@@ -55,6 +59,7 @@ from src.youtube_uploader import (  # noqa: E402
     set_thumbnail,
     upload_short,
 )
+from src.engagement import post_first_comment
 
 LOCK_FILE = os.path.join("data", "pipeline.lock")
 
@@ -64,19 +69,22 @@ def setup_logging(log_file: str | None = None):
     # Avoid duplicate handlers on repeated calls
     if root.handlers:
         return
-    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    root.setLevel(logging.INFO)
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    
+    # Console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+    root.addHandler(console_handler)
+    
+    # File handler (if specified)
     if log_file:
         os.makedirs(os.path.dirname(log_file), exist_ok=True)
-        handlers.append(
-            logging.handlers.RotatingFileHandler(
-                log_file, maxBytes=10 * 1024 * 1024, backupCount=3
-            )
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file, maxBytes=10 * 1024 * 1024, backupCount=3
         )
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=handlers,
-    )
+        file_handler.setFormatter(formatter)
+        root.addHandler(file_handler)
 
 
 def validate_config(streamers: list[StreamerConfig], raw_config: dict, dry_run: bool = False):
@@ -183,6 +191,7 @@ def _sync_streamer_metrics(
     pending_reach: dict[str, str] = {}
     analytics_ok = 0
     analytics_fail = 0
+    data_api_fallback = 0
     for row in rows:
         youtube_id = row["youtube_id"]
         posted_at = row["posted_at"]
@@ -194,6 +203,18 @@ def _sync_streamer_metrics(
         except Exception:
             log.warning("Analytics metrics failed for %s", youtube_id, exc_info=True)
             metrics = None
+        
+        # Fallback to Data API for basic metrics if Analytics has no data yet
+        if metrics is None:
+            try:
+                metrics = fetch_video_metrics_from_data_api(
+                    client_secrets_file, credentials_file, youtube_id
+                )
+                if metrics:
+                    data_api_fallback += 1
+            except Exception:
+                log.warning("Data API fallback failed for %s", youtube_id, exc_info=True)
+        
         if metrics:
             analytics_ok += 1
             update_youtube_metrics(conn, youtube_id, metrics)
@@ -234,8 +255,8 @@ def _sync_streamer_metrics(
             reporting_ok += 1
 
     log.info(
-        "Analytics sync for %s: %d eligible, analytics_ok=%d analytics_fail=%d reporting_ok=%d synced=%d",
-        streamer, len(rows), analytics_ok, analytics_fail, reporting_ok, len(synced_ids),
+        "Analytics sync for %s: %d eligible, analytics_ok=%d (data_api_fallback=%d) analytics_fail=%d reporting_ok=%d synced=%d",
+        streamer, len(rows), analytics_ok, data_api_fallback, analytics_fail, reporting_ok, len(synced_ids),
     )
     return len(synced_ids)
 
@@ -719,6 +740,19 @@ def _process_single_clip_with_context(clip, context: ProcessingContext):
     clip.youtube_id = youtube_id
     insert_clip(conn, clip)
     log.info("Uploaded clip %s -> YouTube %s", clip.id, youtube_id)
+
+    # --- First Comment (engagement boost, non-blocking) ---
+    try:
+        comment_id = post_first_comment(
+            yt_service, youtube_id,
+            game_name=clip.game_name or "",
+            streamer_name=clip.streamer or "",
+            clip_title=clip.title or "",
+        )
+        if comment_id:
+            log.info("Posted first comment on %s: %s", youtube_id, comment_id)
+    except Exception:
+        log.debug("First comment failed for %s (non-critical)", youtube_id, exc_info=True)
 
     # --- Instagram Upload (independent, failure does not block YouTube) ---
     if ig_credentials and cfg.instagram_enabled:
