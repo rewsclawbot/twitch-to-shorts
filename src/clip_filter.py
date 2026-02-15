@@ -39,22 +39,32 @@ def _transform_views(views: int, view_transform: str) -> float:
 
 def _duration_bonus(duration: float, optimal_min: int = 14, optimal_max: int = 31) -> float:
     """
-    Return a multiplier bonus for clips in the optimal duration range.
+    Return a multiplier bonus for clips based on YouTube Shorts algorithm research.
 
-    - Clips in [optimal_min, optimal_max]: 1.0 (baseline)
+    Research (Nate Black, 35B Shorts views) shows 13s and 60s perform best.
+    Bimodal preference: short snappy clips AND full-length clips both get bonuses.
+
+    - Clips in [optimal_min, optimal_max]: 1.0 (primary sweet spot)
+    - Clips near 60s (55-60s): 0.95 (secondary sweet spot — full-length performs well)
+    - Clips in 30-50s dead zone: handled separately in compute_score (0.5x penalty)
     - Clips shorter than optimal_min: linear penalty down to 0.7 at 0s
-    - Clips longer than optimal_max: linear penalty down to 0.5 at 60s
+    - Clips 51-54s: slight penalty (approaching sweet spot)
     """
     if optimal_min <= duration <= optimal_max:
         return 1.0
     if duration < optimal_min:
-        # Linear interpolation: 0.7 at 0s, 1.0 at optimal_min
         return 0.7 + (0.3 * (duration / max(optimal_min, 1)))
-
-    # Linear interpolation: 1.0 at optimal_max, 0.5 at 60s
-    max_overage = max(60 - optimal_max, 1)
-    overage = min(max(duration - optimal_max, 0), max_overage)
-    return 1.0 - (0.5 * (overage / max_overage))
+    # Secondary sweet spot: full-length clips (55-60s)
+    if 55 <= duration <= 60:
+        return 0.95
+    # Transition zone: 51-54s, ramping up to the 55s sweet spot
+    if 50 < duration < 55:
+        return 0.7 + (0.25 * ((duration - 50) / 5))
+    # Between optimal_max and 30: gentle decline
+    if optimal_max < duration <= 30:
+        return 1.0 - (0.3 * ((duration - optimal_max) / max(30 - optimal_max, 1)))
+    # 30-50s dead zone: return low but compute_score also applies 0.5x
+    return 0.5
 
 
 def compute_score(
