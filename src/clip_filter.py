@@ -2,6 +2,7 @@ import logging
 import math
 from datetime import UTC, datetime
 
+from src.audio_scorer import score_audio_excitement
 from src.db import get_game_performance, get_streamer_performance_multiplier
 from src.models import Clip
 
@@ -63,6 +64,7 @@ def compute_score(
     view_transform: str = "linear",
     title_quality_weight: float = 0.0,
     duration_bonus_weight: float = 0.0,
+    audio_excitement_weight: float = 0.0,
     optimal_duration_min: int = 14,
     optimal_duration_max: int = 31,
     game_multipliers: dict[str, float] | None = None,
@@ -83,6 +85,12 @@ def compute_score(
         score *= 1.0 + duration_bonus_weight * (bonus - 1.0)
     if title_quality_weight > 0:
         score *= 1.0 + title_quality_weight * _title_quality(clip.title)
+    if audio_excitement_weight > 0:
+        # Use audio excitement score if available (set after download)
+        audio_score = getattr(clip, 'audio_score', None)
+        if audio_score is not None and isinstance(audio_score, (int, float)):
+            # Audio score is 0-1, so we add weighted bonus
+            score *= 1.0 + audio_excitement_weight * float(audio_score)
     if game_multipliers:
         game_name = (clip.game_name or "").strip()
         if game_name:
@@ -102,6 +110,7 @@ def filter_and_rank(
     view_transform: str = "linear",
     title_quality_weight: float = 0.0,
     duration_bonus_weight: float = 0.0,
+    audio_excitement_weight: float = 0.0,
     optimal_duration_min: int = 14,
     optimal_duration_max: int = 31,
     analytics_enabled: bool = False,
@@ -133,6 +142,7 @@ def filter_and_rank(
             view_transform=view_transform,
             title_quality_weight=title_quality_weight,
             duration_bonus_weight=duration_bonus_weight,
+            audio_excitement_weight=audio_excitement_weight,
             optimal_duration_min=optimal_duration_min,
             optimal_duration_max=optimal_duration_max,
             game_multipliers=game_multipliers,
@@ -143,3 +153,30 @@ def filter_and_rank(
     ranked = sorted(clips, key=lambda c: c.score, reverse=True)
     log.info("Ranked %d clips for %s (from %d fetched)", len(ranked), streamer, len(ranked))
     return ranked
+
+
+def score_clip_audio(clip: Clip, video_path: str, tmp_dir: str) -> float:
+    """Score a downloaded clip's audio excitement.
+    
+    This should be called after download to enhance ranking with audio features.
+    Updates the clip's audio_score attribute and returns the score.
+    
+    Args:
+        clip: Clip object to score
+        video_path: Path to downloaded video file
+        tmp_dir: Temporary directory for audio processing
+        
+    Returns:
+        Audio excitement score (0.0-1.0)
+    """
+    try:
+        audio_score = score_audio_excitement(video_path, tmp_dir)
+        # Store as attribute for use in compute_score
+        clip.audio_score = audio_score  # type: ignore[attr-defined]
+        log.info("Audio excitement score for %s: %.3f", clip.id, audio_score)
+        return audio_score
+    except Exception as e:
+        log.warning("Audio scoring failed for %s: %s", clip.id, e)
+        clip.audio_score = 0.0  # type: ignore[attr-defined]
+        return 0.0
+
