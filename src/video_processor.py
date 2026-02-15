@@ -958,11 +958,11 @@ def _run_ffmpeg(input_path: str, output_path: str, vf: str,
         if "[out]" in vf:
             # Composite mode: rename [out] to [tmp], append subtitle filter
             idx = cmd.index("-filter_complex")
-            cmd[idx + 1] = cmd[idx + 1].replace("[out]", "[tmp]") + f";[tmp]ass={escaped}[out]"
+            cmd[idx + 1] = cmd[idx + 1].replace("[out]", "[tmp]") + f";[tmp]ass='{escaped}'[out]"
         else:
             # Simple mode: append to -vf value
             idx = cmd.index("-vf")
-            cmd[idx + 1] = cmd[idx + 1] + f",ass={escaped}"
+            cmd[idx + 1] = cmd[idx + 1] + f",ass='{escaped}'"
 
     if gpu:
         if use_videotoolbox:
