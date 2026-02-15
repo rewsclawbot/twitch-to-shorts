@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 _LLM_MODEL = "gpt-4o-mini"
 _MAX_TITLE_LEN = 100
 _LLM_MAX_TITLE_LEN = 80
-_LLM_TIMEOUT_SECONDS = 10
+_LLM_TIMEOUT_SECONDS = 8
 _LLM_MAX_ATTEMPTS = 2
 _LLM_RETRY_BACKOFF_SECONDS = 2
 
@@ -41,6 +41,42 @@ def _should_optimize(clip_id: str) -> bool:
     """Return deterministic 50/50 A/B decision for a clip ID."""
     digest = hashlib.md5(clip_id.encode("utf-8")).hexdigest()
     return int(digest, 16) % 2 == 0
+
+
+def _template_fallback_title(clip_title: str, streamer_name: str, game_name: str) -> str:
+    """Apply viral-style patterns to title without LLM (last resort fallback)."""
+    # Common filler words to remove
+    filler_words = {
+        "just", "really", "very", "actually", "basically", "literally",
+        "um", "uh", "like", "you know", "i mean", "kind of", "sort of"
+    }
+    
+    words = clip_title.split()
+    # Remove filler words
+    filtered_words = [w for w in words if w.lower() not in filler_words]
+    
+    # Capitalize key action/impact words for emphasis
+    impact_words = {
+        "insane", "perfect", "crazy", "massive", "epic", "clutch", "impossible",
+        "destroyed", "amazing", "best", "worst", "fails", "wins", "legendary",
+        "unbelievable", "never", "first", "last", "only", "ever", "ace", "steal"
+    }
+    
+    capitalized = []
+    for word in filtered_words:
+        if word.lower() in impact_words:
+            capitalized.append(word.upper())
+        else:
+            capitalized.append(word)
+    
+    # Add strategic emphasis with punctuation (viral pattern)
+    result = " ".join(capitalized)
+    
+    # Add game suffix if provided and not already in title
+    if game_name and game_name.lower() not in result.lower():
+        result = f"{result} | {game_name}"
+    
+    return _truncate_title(result, _LLM_MAX_TITLE_LEN)
 
 
 def _rewrite_title_with_llm(clip_title: str, streamer_name: str, game_name: str) -> str | None:
@@ -75,7 +111,7 @@ def _rewrite_title_with_llm(clip_title: str, streamer_name: str, game_name: str)
             full_prompt = f"{_SYSTEM_PROMPT}\n\n{user_prompt}"
             result = subprocess.run(
                 ["claude", "-p", "--model", "sonnet"],
-                input=full_prompt, capture_output=True, text=True, timeout=60,
+                input=full_prompt, capture_output=True, text=True, timeout=5,
             )
             if result.returncode == 0 and result.stdout.strip():
                 rewritten = result.stdout.strip().splitlines()[0].strip().strip("\"'")
@@ -93,10 +129,11 @@ def _rewrite_title_with_llm(clip_title: str, streamer_name: str, game_name: str)
     base_url = os.environ.get("LLM_BASE_URL")
     api_key = os.environ.get("OPENAI_API_KEY")
     if not base_url and not api_key:
-        return None
+        log.info("No LLM API configured, using template fallback for '%s'", clip_title)
+        return _template_fallback_title(clip_title, streamer_name, game_name)
     if OpenAI is None:
-        log.warning("openai package not installed, skipping title rewrite")
-        return None
+        log.warning("openai package not installed, using template fallback for '%s'", clip_title)
+        return _template_fallback_title(clip_title, streamer_name, game_name)
 
     model_name = os.environ.get("LLM_MODEL_NAME", _LLM_MODEL)
     client_kwargs: dict[str, str] = {"api_key": api_key or "not-needed"}
@@ -135,9 +172,11 @@ def _rewrite_title_with_llm(clip_title: str, streamer_name: str, game_name: str)
                 time.sleep(_LLM_RETRY_BACKOFF_SECONDS)
                 continue
             log.warning("OpenAI title rewrite failed: %s", err)
-            return None
+            break
 
-    return None
+    # All LLM attempts failed, use template-based fallback
+    log.info("All LLM attempts failed for '%s', using template fallback", clip_title)
+    return _template_fallback_title(clip_title, streamer_name, game_name)
 
 
 def optimize_title(
