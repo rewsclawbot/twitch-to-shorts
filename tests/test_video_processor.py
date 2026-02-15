@@ -360,7 +360,7 @@ class TestBurnContextOverlay:
             "in.mp4",
             "out.mp4",
             "Apex Legends",
-            "clean rotation and final ring win",
+            "clean rotation and final ring positioning",
         )
 
         assert result is True

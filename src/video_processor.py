@@ -13,20 +13,47 @@ from src.models import FacecamConfig
 log = logging.getLogger(__name__)
 
 _CONTEXT_KEYWORD_PATTERNS = [
+    # Multi-kill / clutch patterns (highest impact)
     (r"\b1\s*V\s*5\b", "1V5"),
     (r"\b1\s*V\s*4\b", "1V4"),
     (r"\b1\s*V\s*3\b", "1V3"),
     (r"\b1\s*V\s*2\b", "1V2"),
     (r"\bCLUTCH\b", "CLUTCH"),
     (r"\bACE\b", "ACE"),
+    (r"\bPENTAKILL\b", "PENTAKILL"),
+    (r"\bTEAMWIPE\b", "TEAMWIPE"),
+    # Skill shots
+    (r"\bHEADSHOT\b", "HEADSHOT"),
+    (r"\bNOSCOPE\b", "NOSCOPE"),
+    (r"\bFLICK\b", "FLICK"),
+    (r"\bWALLBANG\b", "WALLBANG"),
+    (r"\bCOLLAT(ERAL)?\b", "COLLATERAL"),
+    # Emotional / hype
     (r"\bINSANE\b", "INSANE"),
     (r"\bCRAZY\b", "CRAZY"),
     (r"\bUNREAL\b", "UNREAL"),
     (r"\bSAVAGE\b", "SAVAGE"),
-    (r"\bPENTAKILL\b", "PENTAKILL"),
-    (r"\bTEAMWIPE\b", "TEAMWIPE"),
-    (r"\bHEADSHOT\b", "HEADSHOT"),
-    (r"\bNOSCOPE\b", "NOSCOPE"),
+    (r"\bEPIC\b", "EPIC"),
+    (r"\bWILD\b", "WILD"),
+    (r"\bINCREDIBLE\b", "INCREDIBLE"),
+    (r"\bDESTROYED?\b", "DESTROYED"),
+    (r"\bWIPED?\b", "WIPED"),
+    (r"\bCHOKE[DS]?\b", "CHOKE"),
+    (r"\bRIPPED?\b", "RIP"),
+    # Funny / fail
+    (r"\bFAIL\b", "FAIL"),
+    (r"\bRIP\b", "RIP"),
+    (r"\bBROKEN\b", "BROKEN"),
+    (r"\bGLITCH\b", "GLITCH"),
+    (r"\bBUG\b", "BUG"),
+    # Win/loss
+    (r"\bWIN\b", "WIN"),
+    (r"\bDUB\b", "DUB"),
+    (r"\bCHAMPION\b", "CHAMPION"),
+    (r"\bVICTORY\b", "VICTORY"),
+    # Suspense / anticipation hooks
+    (r"\bWAIT\b", "WAIT FOR IT..."),
+    (r"\bWATCH\s*(THIS|TILL)\b", "WATCH THIS"),
 ]
 
 _CONTEXT_FONT_CANDIDATES = [
