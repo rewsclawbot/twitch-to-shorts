@@ -8,7 +8,7 @@ import httplib2
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from src.youtube_uploader import get_credentials
+from src.youtube_uploader import get_authenticated_service, get_credentials
 
 log = logging.getLogger(__name__)
 
@@ -93,6 +93,39 @@ def _normalize_ctr(value: float | None) -> float | None:
     return value / 100.0
 
 
+def fetch_video_metrics_from_data_api(
+    client_secrets_file: str, credentials_file: str, video_id: str
+) -> dict | None:
+    """Fallback to YouTube Data API for basic real-time metrics when Analytics has no data yet."""
+    try:
+        youtube_service = get_authenticated_service(client_secrets_file, credentials_file)
+        request = youtube_service.videos().list(part="statistics", id=video_id)
+        response = _execute_request(request)
+        items = response.get("items", [])
+        if not items:
+            log.warning("Data API: video %s not found", video_id)
+            return None
+        
+        stats = items[0].get("statistics", {})
+        views = _to_int(stats.get("viewCount"))
+        
+        # Data API doesn't provide watch time or percentage, only basic counts
+        result = {
+            "yt_views": views,
+            "yt_estimated_minutes_watched": None,
+            "yt_avg_view_duration": None,
+            "yt_avg_view_percentage": None,
+            "yt_impressions": None,
+            "yt_impressions_ctr": None,
+            "yt_last_sync": datetime.now(UTC).isoformat(),
+        }
+        log.info("Data API fallback: %s has %s views", video_id, views or 0)
+        return result
+    except Exception:
+        log.warning("Data API fallback failed for %s", video_id, exc_info=True)
+        return None
+
+
 def fetch_video_metrics(service, video_id: str, start_date: str, end_date: str) -> dict | None:
     # Try reach metrics first, fall back to core-only if the API rejects them
     reach_available = False
@@ -110,6 +143,7 @@ def fetch_video_metrics(service, video_id: str, start_date: str, end_date: str) 
 
     data = _parse_report(response)
     if not data:
+        log.info("Analytics returned no data for %s (likely too new, data lag 24-48h)", video_id)
         return None
 
     result = {
