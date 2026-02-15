@@ -10,6 +10,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from src.clip_filter import filter_and_rank, score_clip_audio  # noqa: E402
+from src.hook_detector import score_hook_strength  # noqa: E402
 from src.db import (  # noqa: E402
     get_clips_for_metrics,
     get_connection,
@@ -22,6 +23,12 @@ from src.db import (  # noqa: E402
     update_youtube_metrics,
     update_youtube_reach_metrics,
     upsert_clip_metadata,
+)
+from src.db_queue import (  # noqa: E402
+    dequeue_top_clips,
+    enqueue_clips,
+    expire_old_queue,
+    mark_clip_uploaded,
 )
 from src.dedup import filter_new_clips  # noqa: E402
 from src.downloader import download_clip  # noqa: E402
@@ -636,6 +643,19 @@ def _process_single_clip_with_context(clip, context: ProcessingContext):
         increment_fail_count(conn, clip)
         return "downloaded_fail", None
 
+    # Score hook strength (first 3 seconds) for downloaded clip
+    hook_strength_weight = float(getattr(cfg, "hook_strength_weight", 0.0))
+    if hook_strength_weight > 0:
+        clip_duration = float(getattr(clip, "duration", 0) or 0)
+        if clip_duration > 0:
+            hook_score = score_hook_strength(video_path, clip.title, clip_duration)
+            clip.hook_score = hook_score  # type: ignore[attr-defined]
+            if hook_score < 0.3:
+                log.warning(
+                    "Clip %s has low hook strength: %.3f (still proceeding with upload for data collection)",
+                    clip.id, hook_score
+                )
+
     processing_video_path = video_path
     smart_trim_path = None
     smart_trim_enabled = bool(getattr(cfg, "smart_trim", False))
@@ -919,6 +939,7 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
         title_quality_weight=cfg.title_quality_weight,
         duration_bonus_weight=cfg.duration_bonus_weight,
         audio_excitement_weight=cfg.audio_excitement_weight,
+        hook_strength_weight=0,
         optimal_duration_min=cfg.optimal_duration_min,
         optimal_duration_max=cfg.optimal_duration_max,
         analytics_enabled=cfg.analytics_enabled,
@@ -954,9 +975,30 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
 
     # Check posting schedule window
     if not _is_within_posting_window(cfg.posting_schedule, cfg.force_upload):
-        log.info("Skipping upload - outside posting window")
+        log.info("Outside posting window - enqueueing top clips for later")
+        # Store top clips in queue for later upload
+        clips_to_queue = new_clips[:uploads_remaining]
+        clips_with_scores = [(c, c.score) for c in clips_to_queue]
+        enqueue_clips(conn, clips_with_scores)
+        log.info("Enqueued %d clips for %s (queue for later upload)", len(clips_to_queue), name)
         skip_reason = "outside_posting_window"
         return _finalize_and_return(False)
+
+    # Inside posting window - dequeue any previously stored clips
+    queued_clips = dequeue_top_clips(conn, limit=cfg.max_clips_per_streamer, streamer=name)
+    if queued_clips:
+        log.info("Dequeued %d clips from queue for %s", len(queued_clips), name)
+        # Merge queued clips with new clips and re-rank by score
+        all_clips_combined = queued_clips + new_clips
+        # Remove duplicates by clip_id (keep the one with higher score)
+        seen: dict[str, Clip] = {}
+        for clip in all_clips_combined:
+            if clip.id not in seen or clip.score > seen[clip.id].score:
+                seen[clip.id] = clip
+        new_clips = sorted(seen.values(), key=lambda c: c.score, reverse=True)
+        new_clips = new_clips[:cfg.max_clips_per_streamer]
+        log.info("Combined %d queued + %d new = %d total candidates", 
+                 len(queued_clips), len(all_clips_combined) - len(queued_clips), len(new_clips))
 
     game_ids = [c.game_id for c in new_clips]
     try:
@@ -991,6 +1033,7 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
             title_quality_weight=cfg.title_quality_weight,
             duration_bonus_weight=cfg.duration_bonus_weight,
             audio_excitement_weight=cfg.audio_excitement_weight,
+            hook_strength_weight=cfg.hook_strength_weight,
             optimal_duration_min=cfg.optimal_duration_min,
             optimal_duration_max=cfg.optimal_duration_max,
             analytics_enabled=cfg.analytics_enabled,
@@ -1105,6 +1148,8 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
             uploaded += 1
             uploads_remaining -= 1
             consecutive_403s = 0
+            # Mark clip as uploaded in queue if it came from there
+            mark_clip_uploaded(conn, clip.id)
 
     update_streamer_stats(conn, name)
 
@@ -1164,6 +1209,12 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
     started_at = datetime.now(UTC).isoformat()
     trigger = os.environ.get("PIPELINE_TRIGGER", "local")
     run_id = insert_pipeline_run(conn, started_at, trigger)
+    
+    # Expire old queued clips at the start of each run
+    expired_count = expire_old_queue(conn, max_age_hours=72)
+    if expired_count > 0:
+        log.info("Expired %d old queued clips (>72h)", expired_count)
+    
     streamer_results = []
 
     def _totals() -> dict:

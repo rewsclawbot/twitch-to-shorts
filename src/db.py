@@ -63,9 +63,20 @@ def init_schema(conn: sqlite3.Connection):
             streamer_details TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS clip_queue (
+            clip_id TEXT PRIMARY KEY,
+            streamer TEXT NOT NULL,
+            score REAL NOT NULL,
+            queued_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            clip_data TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_clips_streamer ON clips(streamer);
         CREATE INDEX IF NOT EXISTS idx_clips_posted ON clips(posted_at);
         CREATE INDEX IF NOT EXISTS idx_runs_started ON pipeline_runs(started_at);
+        CREATE INDEX IF NOT EXISTS idx_queue_status_score ON clip_queue(status, score DESC);
+        CREATE INDEX IF NOT EXISTS idx_queue_streamer ON clip_queue(streamer);
     """)
     # Migration: add columns if missing (existing cached DBs may lack them)
     cols = {row[1] for row in conn.execute("PRAGMA table_info(clips)").fetchall()}
@@ -231,6 +242,30 @@ def get_todays_runs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         "SELECT * FROM pipeline_runs WHERE started_at >= ? ORDER BY started_at",
         (today + "T00:00:00",),
     ).fetchall()
+
+
+def upsert_clip_metadata(conn: sqlite3.Connection, clip: Clip):
+    """Store basic clip metadata without youtube_id or processing fields.
+
+    Used to persist clips fetched from Twitch even when outside posting windows.
+    Allows the pipeline to avoid re-fetching and re-ranking the same clips on every run.
+    """
+    conn.execute(
+        """INSERT INTO clips (clip_id, streamer, channel_key, title, view_count, created_at, duration, game_name, vod_id, vod_offset)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(clip_id) DO UPDATE SET
+               view_count = excluded.view_count,
+               title = excluded.title,
+               channel_key = excluded.channel_key,
+               game_name = COALESCE(NULLIF(excluded.game_name, ''), clips.game_name),
+               duration = COALESCE(excluded.duration, clips.duration),
+               vod_id = COALESCE(excluded.vod_id, clips.vod_id),
+               vod_offset = COALESCE(excluded.vod_offset, clips.vod_offset)""",
+        (clip.id, clip.streamer, clip.channel_key, clip.title, clip.view_count,
+         clip.created_at, clip.duration, clip.game_name,
+         getattr(clip, 'vod_id', None), getattr(clip, 'vod_offset', None)),
+    )
+    conn.commit()
 
 
 def insert_clip(conn: sqlite3.Connection, clip: Clip):

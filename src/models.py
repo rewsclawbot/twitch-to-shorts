@@ -64,6 +64,7 @@ class PipelineConfig:
     title_quality_weight: float = 0.05
     duration_bonus_weight: float = 0.0
     audio_excitement_weight: float = 0.15
+    hook_strength_weight: float = 0.0
     optimal_duration_min: int = 14
     optimal_duration_max: int = 31
     tmp_dir: str = "data/tmp"
@@ -117,6 +118,7 @@ class PipelineConfig:
             ("title_quality_weight", self.title_quality_weight),
             ("duration_bonus_weight", self.duration_bonus_weight),
             ("audio_excitement_weight", self.audio_excitement_weight),
+            ("hook_strength_weight", self.hook_strength_weight),
             ("min_visual_quality", self.min_visual_quality),
         ]
         for name, numeric_value in float_fields:

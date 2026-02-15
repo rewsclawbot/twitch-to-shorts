@@ -75,6 +75,7 @@ def compute_score(
     title_quality_weight: float = 0.0,
     duration_bonus_weight: float = 0.0,
     audio_excitement_weight: float = 0.0,
+    hook_strength_weight: float = 0.0,
     optimal_duration_min: int = 14,
     optimal_duration_max: int = 31,
     game_multipliers: dict[str, float] | None = None,
@@ -101,6 +102,12 @@ def compute_score(
         if audio_score is not None and isinstance(audio_score, (int, float)):
             # Audio score is 0-1, so we add weighted bonus
             score *= 1.0 + audio_excitement_weight * float(audio_score)
+    if hook_strength_weight > 0:
+        # Use hook strength score if available (set after download)
+        hook_score = getattr(clip, 'hook_score', None)
+        if hook_score is not None and isinstance(hook_score, (int, float)):
+            # Hook score is 0-1, so we add weighted bonus
+            score *= 1.0 + hook_strength_weight * float(hook_score)
     if game_multipliers:
         game_name = (clip.game_name or "").strip()
         if game_name:
@@ -121,6 +128,7 @@ def filter_and_rank(
     title_quality_weight: float = 0.0,
     duration_bonus_weight: float = 0.0,
     audio_excitement_weight: float = 0.0,
+    hook_strength_weight: float = 0.0,
     optimal_duration_min: int = 14,
     optimal_duration_max: int = 31,
     analytics_enabled: bool = False,
@@ -153,6 +161,7 @@ def filter_and_rank(
             title_quality_weight=title_quality_weight,
             duration_bonus_weight=duration_bonus_weight,
             audio_excitement_weight=audio_excitement_weight,
+            hook_strength_weight=hook_strength_weight,
             optimal_duration_min=optimal_duration_min,
             optimal_duration_max=optimal_duration_max,
             game_multipliers=game_multipliers,

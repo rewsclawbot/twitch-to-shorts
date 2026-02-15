@@ -23,7 +23,12 @@ def load_blocklist(blocklist_path: str = DEFAULT_BLOCKLIST_PATH) -> set[str]:
 
 
 def filter_new_clips(conn: sqlite3.Connection, clips: list[Clip], blocklist_path: str = DEFAULT_BLOCKLIST_PATH) -> list[Clip]:
-    """Return only clips not already in the database, overlapping, or blacklisted."""
+    """Return only clips not already in the database, overlapping, or blacklisted.
+
+    Clips that exist in the DB but haven't been uploaded (youtube_id IS NULL) are
+    still eligible for upload. This allows the pipeline to persist clip metadata
+    on fetch without blocking future upload attempts.
+    """
     if not clips:
         return []
 
@@ -32,6 +37,8 @@ def filter_new_clips(conn: sqlite3.Connection, clips: list[Clip], blocklist_path
     retry_cutoff = (datetime.now(UTC) - timedelta(hours=FAIL_RETRY_HOURS)).isoformat()
 
     # Batch query: existing clip IDs (include permanently failed clips)
+    # Note: Clips with youtube_id=NULL (metadata-only) are NOT included in existing,
+    # so they remain eligible for upload
     placeholders = ",".join("?" for _ in clip_ids)
     existing = {
         row[0] for row in conn.execute(

@@ -86,13 +86,14 @@ pipeline:
   title_quality_weight: 0.05
   duration_bonus_weight: 0.3
   audio_excitement_weight: 0.15
+  hook_strength_weight: 0.2
   optimal_duration_min: 10
   optimal_duration_max: 15
   tmp_dir: data/tmp
   db_path: data/clips.db
   log_file: data/pipeline.log
-  upload_spacing_hours: 2
-  max_uploads_per_window: 3
+  upload_spacing_hours: 1
+  max_uploads_per_window: 5
   analytics_enabled: true
   instagram_enabled: false
   analytics_min_age_hours: 24
@@ -110,6 +111,8 @@ pipeline:
     enabled: true
     timezone: America/Chicago  # CST/CDT
     weekday_windows:
+      - start: '06:00'
+        end: '08:00'
       - start: '11:00'
         end: '14:30'
       - start: '17:00'
