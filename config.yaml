@@ -103,7 +103,7 @@ pipeline:
   context_overlay: true
   smart_trim: false
   smart_trim_target_duration: 15
-  min_visual_quality: 0.3
+  min_visual_quality: 0.08
   force_upload: false
   posting_schedule:
     enabled: true
