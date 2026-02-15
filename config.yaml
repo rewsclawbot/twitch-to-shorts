@@ -110,11 +110,11 @@ pipeline:
     timezone: America/Chicago  # CST/CDT
     weekday_windows:
       - start: '11:00'
-        end: '14:00'
-      - start: '18:00'
-        end: '20:00'
+        end: '14:30'
+      - start: '17:00'
+        end: '21:00'
     weekend_windows:
-      - start: '08:00'
-        end: '14:00'
-      - start: '16:00'
-        end: '18:00'
+      - start: '09:00'
+        end: '15:00'
+      - start: '17:00'
+        end: '21:00'

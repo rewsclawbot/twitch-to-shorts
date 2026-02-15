@@ -119,43 +119,46 @@ def _get_duration(path: str) -> float | None:
 
 
 def _batch_sample_ydif(video_path: str, timestamps: list[float]) -> list[float]:
-    """Sample YDIF at multiple timestamps using a single ffmpeg filter_complex call.
+    """Sample YDIF at multiple timestamps using batched ffmpeg filter_complex calls.
 
     Returns a list of max-YDIF values, one per timestamp (0.0 on failure).
+    Batches into groups of 8 to avoid opening too many decode pipelines.
     """
     if not timestamps:
         return []
 
-    n = len(timestamps)
-    cmd = [FFMPEG]
-    for ts in timestamps:
-        cmd += ["-ss", f"{ts:.2f}", "-i", video_path]
+    BATCH_SIZE = 8
+    all_scores: list[float] = []
 
-    # Each input: extract 1 frame through signalstats, then concat all
-    filters = []
-    for i in range(n):
-        filters.append(f"[{i}:v]signalstats,metadata=print,trim=end_frame=1[v{i}]")
-    concat_inputs = "".join(f"[v{i}]" for i in range(n))
-    filters.append(f"{concat_inputs}concat=n={n}:v=1:a=0[out]")
-    cmd += ["-filter_complex", ";".join(filters), "-map", "[out]", "-f", "null", "-"]
+    for batch_start in range(0, len(timestamps), BATCH_SIZE):
+        batch_ts = timestamps[batch_start:batch_start + BATCH_SIZE]
+        n = len(batch_ts)
+        cmd = [FFMPEG]
+        for ts in batch_ts:
+            cmd += ["-ss", f"{ts:.2f}", "-i", video_path]
 
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        # Parse all YDIF values from stderr
-        all_ydif: list[float] = []
-        for line in result.stderr.splitlines():
-            if "signalstats.YDIF=" in line:
-                with contextlib.suppress(ValueError, IndexError):
-                    all_ydif.append(float(line.split("YDIF=")[1]))
-        # With 1 frame per input, we expect 1 YDIF per timestamp
-        # If we got fewer, pad with 0.0; if more (shouldn't happen), take first n
-        scores = []
+        # Each input: extract 1 frame through signalstats, then concat all
+        filters = []
         for i in range(n):
-            scores.append(all_ydif[i] if i < len(all_ydif) else 0.0)
-        return scores
-    except Exception as e:
-        log.warning("Batch YDIF sampling failed: %s", e)
-        return [0.0] * n
+            filters.append(f"[{i}:v]signalstats,metadata=print,trim=end_frame=1[v{i}]")
+        concat_inputs = "".join(f"[v{i}]" for i in range(n))
+        filters.append(f"{concat_inputs}concat=n={n}:v=1:a=0[out]")
+        cmd += ["-filter_complex", ";".join(filters), "-map", "[out]", "-f", "null", "-"]
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            all_ydif: list[float] = []
+            for line in result.stderr.splitlines():
+                if "signalstats.YDIF=" in line:
+                    with contextlib.suppress(ValueError, IndexError):
+                        all_ydif.append(float(line.split("YDIF=")[1]))
+            for i in range(n):
+                all_scores.append(all_ydif[i] if i < len(all_ydif) else 0.0)
+        except Exception as e:
+            log.warning("Batch YDIF sampling failed: %s", e)
+            all_scores.extend([0.0] * n)
+
+    return all_scores
 
 
 def _extract_signalstats_metric_values(stderr: str, metric: str) -> list[float]:
@@ -170,72 +173,88 @@ def _extract_signalstats_metric_values(stderr: str, metric: str) -> list[float]:
 
 
 def _batch_sample_sobel_edge_density(video_path: str, timestamps: list[float]) -> list[float]:
-    """Sample normalized Sobel edge density [0,1] at given timestamps."""
+    """Sample normalized Sobel edge density [0,1] at given timestamps.
+
+    Batches into groups of 8 to avoid opening too many decode pipelines.
+    """
     if not timestamps:
         return []
 
-    n = len(timestamps)
-    cmd = [FFMPEG]
-    for ts in timestamps:
-        cmd += ["-ss", f"{ts:.2f}", "-i", video_path]
+    BATCH_SIZE = 8
+    all_scores: list[float] = []
 
-    filters = []
-    for i in range(n):
-        filters.append(f"[{i}:v]format=gray,sobel,signalstats,metadata=print,trim=end_frame=1[v{i}]")
-    concat_inputs = "".join(f"[v{i}]" for i in range(n))
-    filters.append(f"{concat_inputs}concat=n={n}:v=1:a=0[out]")
-    cmd += ["-filter_complex", ";".join(filters), "-map", "[out]", "-f", "null", "-"]
+    for batch_start in range(0, len(timestamps), BATCH_SIZE):
+        batch_ts = timestamps[batch_start:batch_start + BATCH_SIZE]
+        n = len(batch_ts)
+        cmd = [FFMPEG]
+        for ts in batch_ts:
+            cmd += ["-ss", f"{ts:.2f}", "-i", video_path]
 
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
-        yavg_values = _extract_signalstats_metric_values(result.stderr, "YAVG")
-        scores: list[float] = []
+        filters = []
         for i in range(n):
-            raw = yavg_values[i] if i < len(yavg_values) else 0.0
-            scores.append(max(0.0, min(raw / 255.0, 1.0)))
-        return scores
-    except Exception as e:
-        log.warning("Batch Sobel edge sampling failed: %s", e)
-        return [0.0] * n
+            filters.append(f"[{i}:v]format=gray,sobel,signalstats,metadata=print,trim=end_frame=1[v{i}]")
+        concat_inputs = "".join(f"[v{i}]" for i in range(n))
+        filters.append(f"{concat_inputs}concat=n={n}:v=1:a=0[out]")
+        cmd += ["-filter_complex", ";".join(filters), "-map", "[out]", "-f", "null", "-"]
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+            yavg_values = _extract_signalstats_metric_values(result.stderr, "YAVG")
+            for i in range(n):
+                raw = yavg_values[i] if i < len(yavg_values) else 0.0
+                all_scores.append(max(0.0, min(raw / 255.0, 1.0)))
+        except Exception as e:
+            log.warning("Batch Sobel edge sampling failed: %s", e)
+            all_scores.extend([0.0] * n)
+
+    return all_scores
 
 
 def _batch_sample_color_variance(video_path: str, timestamps: list[float]) -> list[float]:
-    """Sample normalized chroma variance proxy [0,1] at given timestamps."""
+    """Sample normalized chroma variance proxy [0,1] at given timestamps.
+
+    Batches into groups of 8 to avoid opening too many decode pipelines.
+    """
     if not timestamps:
         return []
 
-    n = len(timestamps)
-    cmd = [FFMPEG]
-    for ts in timestamps:
-        cmd += ["-ss", f"{ts:.2f}", "-i", video_path]
+    BATCH_SIZE = 8
+    all_scores: list[float] = []
 
-    filters = []
-    for i in range(n):
-        filters.append(f"[{i}:v]signalstats,metadata=print,trim=end_frame=1[v{i}]")
-    concat_inputs = "".join(f"[v{i}]" for i in range(n))
-    filters.append(f"{concat_inputs}concat=n={n}:v=1:a=0[out]")
-    cmd += ["-filter_complex", ";".join(filters), "-map", "[out]", "-f", "null", "-"]
+    for batch_start in range(0, len(timestamps), BATCH_SIZE):
+        batch_ts = timestamps[batch_start:batch_start + BATCH_SIZE]
+        n = len(batch_ts)
+        cmd = [FFMPEG]
+        for ts in batch_ts:
+            cmd += ["-ss", f"{ts:.2f}", "-i", video_path]
 
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
-        umin_values = _extract_signalstats_metric_values(result.stderr, "UMIN")
-        umax_values = _extract_signalstats_metric_values(result.stderr, "UMAX")
-        vmin_values = _extract_signalstats_metric_values(result.stderr, "VMIN")
-        vmax_values = _extract_signalstats_metric_values(result.stderr, "VMAX")
-
-        scores: list[float] = []
+        filters = []
         for i in range(n):
-            if i >= len(umin_values) or i >= len(umax_values) or i >= len(vmin_values) or i >= len(vmax_values):
-                scores.append(0.0)
-                continue
-            u_range = max(0.0, umax_values[i] - umin_values[i])
-            v_range = max(0.0, vmax_values[i] - vmin_values[i])
-            variance_norm = ((u_range * u_range) + (v_range * v_range)) / (2.0 * 255.0 * 255.0)
-            scores.append(max(0.0, min(variance_norm, 1.0)))
-        return scores
-    except Exception as e:
-        log.warning("Batch color variance sampling failed: %s", e)
-        return [0.0] * n
+            filters.append(f"[{i}:v]signalstats,metadata=print,trim=end_frame=1[v{i}]")
+        concat_inputs = "".join(f"[v{i}]" for i in range(n))
+        filters.append(f"{concat_inputs}concat=n={n}:v=1:a=0[out]")
+        cmd += ["-filter_complex", ";".join(filters), "-map", "[out]", "-f", "null", "-"]
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+            umin_values = _extract_signalstats_metric_values(result.stderr, "UMIN")
+            umax_values = _extract_signalstats_metric_values(result.stderr, "UMAX")
+            vmin_values = _extract_signalstats_metric_values(result.stderr, "VMIN")
+            vmax_values = _extract_signalstats_metric_values(result.stderr, "VMAX")
+
+            for i in range(n):
+                if i >= len(umin_values) or i >= len(umax_values) or i >= len(vmin_values) or i >= len(vmax_values):
+                    all_scores.append(0.0)
+                    continue
+                u_range = max(0.0, umax_values[i] - umin_values[i])
+                v_range = max(0.0, vmax_values[i] - vmin_values[i])
+                variance_norm = ((u_range * u_range) + (v_range * v_range)) / (2.0 * 255.0 * 255.0)
+                all_scores.append(max(0.0, min(variance_norm, 1.0)))
+        except Exception as e:
+            log.warning("Batch color variance sampling failed: %s", e)
+            all_scores.extend([0.0] * n)
+
+    return all_scores
 
 
 def score_visual_quality(video_path: str, samples: int = 10) -> float:
@@ -939,11 +958,11 @@ def _run_ffmpeg(input_path: str, output_path: str, vf: str,
         if "[out]" in vf:
             # Composite mode: rename [out] to [tmp], append subtitle filter
             idx = cmd.index("-filter_complex")
-            cmd[idx + 1] = cmd[idx + 1].replace("[out]", "[tmp]") + f";[tmp]ass='{escaped}'[out]"
+            cmd[idx + 1] = cmd[idx + 1].replace("[out]", "[tmp]") + f";[tmp]ass={escaped}[out]"
         else:
             # Simple mode: append to -vf value
             idx = cmd.index("-vf")
-            cmd[idx + 1] = cmd[idx + 1] + f",ass='{escaped}'"
+            cmd[idx + 1] = cmd[idx + 1] + f",ass={escaped}"
 
     if gpu:
         if use_videotoolbox:
