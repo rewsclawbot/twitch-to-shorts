@@ -74,8 +74,9 @@ def _rewrite_title_with_llm(clip_title: str, streamer_name: str, game_name: str)
         f"Game: {game_name}"
     )
 
-    # Try Anthropic (Claude Opus) first
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+    # Try Anthropic (Claude Opus) first — skip if local LLM is available (free)
+    local_url = os.environ.get("OPENAI_BASE_URL") or os.environ.get("LOCAL_LLM_URL")
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY") if not local_url else None
     if anthropic_key and anthropic is not None:
         for attempt in range(_LLM_MAX_ATTEMPTS):
             try:
