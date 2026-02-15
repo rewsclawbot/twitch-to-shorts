@@ -29,9 +29,11 @@ _LLM_RETRY_BACKOFF_SECONDS = 2
 _MAX_DESCRIPTION_LEN = 200
 
 SCOPES = [
+    "https://www.googleapis.com/auth/youtube",
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.readonly",
     "https://www.googleapis.com/auth/yt-analytics.readonly",
+    "https://www.googleapis.com/auth/youtube.force-ssl",
 ]
 QUOTA_REASONS = {
     "uploadLimitExceeded",
