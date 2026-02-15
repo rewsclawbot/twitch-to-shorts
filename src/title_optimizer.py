@@ -1,16 +1,12 @@
 """AI-powered Twitch clip title optimization for YouTube Shorts."""
 
-# Dependency: anthropic>=0.30.0 or openai>=1.0.0
+# Dependency: openai>=1.0.0 (for local LLM fallback)
 
 import hashlib
 import logging
 import os
+import subprocess
 import time
-
-try:
-    import anthropic  # type: ignore[import-not-found]
-except ImportError:
-    anthropic = None
 
 try:
     from openai import OpenAI  # type: ignore[import-not-found]
@@ -19,7 +15,6 @@ except ImportError:
 
 log = logging.getLogger(__name__)
 
-_ANTHROPIC_MODEL = "claude-opus-4-0-20250514"
 _LLM_MODEL = "gpt-4o-mini"
 _MAX_TITLE_LEN = 100
 _LLM_MAX_TITLE_LEN = 80
@@ -74,31 +69,25 @@ def _rewrite_title_with_llm(clip_title: str, streamer_name: str, game_name: str)
         f"Game: {game_name}"
     )
 
-    # Try Anthropic (Claude Opus) first — skip if local LLM is available (free)
-    local_url = os.environ.get("OPENAI_BASE_URL") or os.environ.get("LOCAL_LLM_URL")
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")  # Always try Claude first — titles are too important for a local model
-    if anthropic_key and anthropic is not None:
-        for attempt in range(_LLM_MAX_ATTEMPTS):
-            try:
-                client = anthropic.Anthropic(api_key=anthropic_key)
-                response = client.messages.create(
-                    model=_ANTHROPIC_MODEL,
-                    max_tokens=100,
-                    system=_SYSTEM_PROMPT,
-                    messages=[{"role": "user", "content": user_prompt}],
-                )
-                content = response.content[0].text if response.content else ""
-                rewritten = content.strip().splitlines()[0].strip().strip("\"'")
+    # Try Claude CLI first (uses OAuth via Claude Max plan — no API key needed)
+    for attempt in range(_LLM_MAX_ATTEMPTS):
+        try:
+            full_prompt = f"{_SYSTEM_PROMPT}\n\n{user_prompt}"
+            result = subprocess.run(
+                ["claude", "-p", "--model", "sonnet"],
+                input=full_prompt, capture_output=True, text=True, timeout=60,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                rewritten = result.stdout.strip().splitlines()[0].strip().strip("\"'")
                 if rewritten:
-                    log.info("Claude Opus title: '%s' -> '%s'", clip_title, rewritten)
+                    log.info("Claude CLI title: '%s' -> '%s'", clip_title, rewritten)
                     return _truncate_title(rewritten, _LLM_MAX_TITLE_LEN)
-                log.warning("Claude returned empty title for '%s'", clip_title)
-                return None
-            except Exception:
-                log.warning("Claude title rewrite attempt %d failed for '%s'", attempt + 1, clip_title, exc_info=True)
-                if attempt < _LLM_MAX_ATTEMPTS - 1:
-                    time.sleep(_LLM_RETRY_BACKOFF_SECONDS)
-        log.warning("All Claude attempts failed, falling back to OpenAI")
+            log.warning("Claude CLI returned empty/error for '%s' (rc=%d)", clip_title, result.returncode)
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            log.warning("Claude CLI attempt %d failed for '%s'", attempt + 1, clip_title, exc_info=True)
+        if attempt < _LLM_MAX_ATTEMPTS - 1:
+            time.sleep(_LLM_RETRY_BACKOFF_SECONDS)
+    log.warning("All Claude CLI attempts failed, falling back to local LLM")
 
     # Fallback to OpenAI-compatible API
     base_url = os.environ.get("LLM_BASE_URL")
