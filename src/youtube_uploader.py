@@ -202,18 +202,13 @@ def _as_hashtag(text: str | None) -> str | None:
 def _build_default_description(clip: Clip) -> str:
     game_name = clip.game_name or "gaming"
     game_hashtag = _as_hashtag(clip.game_name)
-    streamer_hashtag = _as_hashtag(clip.streamer)
-    hashtags = ["#shorts", "#gaming", "#twitchclips"]
+    hashtags = ["#Shorts", "#gaming"]
     if game_hashtag:
         hashtags.append(game_hashtag)
-    if streamer_hashtag:
-        hashtags.append(streamer_hashtag)
     hashtags = _dedupe_tags(hashtags)
     hashtag_line = " ".join(hashtags[:5])
     return (
-        f"{game_name} highlight from {clip.streamer}: {clip.title}\n\n"
-        f"Gaming shorts, clutch moments, and funny stream clips.\n"
-        f"Credit: {clip.streamer} on Twitch.\n\n"
+        f"{game_name} highlight — clip from {clip.streamer} on Twitch.\n\n"
         f"{hashtag_line}"
     )
 
@@ -260,23 +255,23 @@ def _postprocess_optimized_description(text: str, game_name: str) -> str | None:
 
 
 def optimize_description(title: str, game_name: str, streamer_name: str) -> str | None:
-    """Generate an engaging Shorts description via local LLM and enforce platform constraints."""
-    base_url = os.environ.get("LLM_BASE_URL")
-    if not base_url:
-        return None
+    """Generate an engaging Shorts description via Claude CLI or local LLM, enforcing platform constraints."""
 
-    model_name = os.environ.get("LLM_MODEL_NAME", _LLM_MODEL)
-    endpoint = base_url.rstrip("/") + "/chat/completions"
     game_hashtag = _as_hashtag(game_name) or "#gaming"
     system_prompt = (
-        "You write YouTube Shorts descriptions for gaming clips.\n"
-        "Return a compact description with:\n"
-        "1) a hook first line,\n"
-        "2) short game context,\n"
-        "3) hashtags including #shorts #gaming and the game hashtag,\n"
-        "4) a clear call to action.\n"
-        "Keep the full output under 200 characters.\n"
-        "Output only description text."
+        "You write YouTube Shorts descriptions for gaming highlight clips.\n"
+        "CRITICAL: YouTube now has a dedicated Shorts search filter (Jan 2026).\n"
+        "Descriptions are indexed for search — include natural keywords viewers would search for.\n\n"
+        "Structure:\n"
+        "1) Hook line (first ~125 chars = search preview): describe what happens in specific,\n"
+        "   searchable terms. Use the game name + play type (clutch, fail, combo, highlight).\n"
+        "   Example: 'Insane 1v5 clutch in Valorant — this play broke Twitch chat'\n"
+        "2) Credit: 'Clip from [streamer] on Twitch'\n"
+        "3) Hashtags: #Shorts #gaming [game hashtag] — 3-5 total, no more\n\n"
+        "Keep the FULL output under 200 characters.\n"
+        "Do NOT use generic filler ('insane moment', 'you won't believe').\n"
+        "Do NOT add subscribe CTAs.\n"
+        "Output ONLY the description text, nothing else."
     )
     user_prompt = (
         f"Title: {title}\n"
@@ -284,6 +279,31 @@ def optimize_description(title: str, game_name: str, streamer_name: str) -> str 
         f"Streamer: {streamer_name}\n"
         f"Required game hashtag: {game_hashtag}"
     )
+
+    # Try Claude CLI first (uses OAuth — no API key needed)
+    try:
+        import subprocess
+        full_prompt = f"{system_prompt}\n\n{user_prompt}"
+        result = subprocess.run(
+            ["claude", "-p", "--model", "sonnet"],
+            input=full_prompt, capture_output=True, text=True, timeout=8,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            desc = result.stdout.strip()
+            processed = _postprocess_optimized_description(desc, game_name)
+            if processed:
+                log.info("Claude CLI description for '%s': %s", title, processed[:60])
+                return processed
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        log.debug("Claude CLI not available for description, trying local LLM")
+
+    # Fallback to local LLM
+    base_url = os.environ.get("LLM_BASE_URL")
+    if not base_url:
+        return None
+
+    model_name = os.environ.get("LLM_MODEL_NAME", _LLM_MODEL)
+    endpoint = base_url.rstrip("/") + "/chat/completions"
     payload = {
         "model": model_name,
         "messages": [

@@ -202,7 +202,8 @@ class TestOptimizeDescription:
             assert optimize_description("Clip Title", "Valorant", "streamer1") is None
 
     @patch("src.youtube_uploader.requests.post")
-    def test_uses_local_llm_and_enforces_constraints(self, mock_post):
+    @patch("subprocess.run", side_effect=FileNotFoundError("no claude"))
+    def test_uses_local_llm_and_enforces_constraints(self, _mock_claude, mock_post):
         mock_response = MagicMock()
         mock_response.raise_for_status.return_value = None
         mock_response.json.return_value = {
@@ -236,9 +237,9 @@ class TestOptimizeDescription:
         assert args[0] == "http://localhost:1234/v1/chat/completions"
         assert kwargs["json"]["model"] == "qwen-local"
         system_prompt = kwargs["json"]["messages"][0]["content"].lower()
-        assert "hook first line" in system_prompt
+        assert "hook line" in system_prompt
         assert "under 200 characters" in system_prompt
-        assert "call to action" in system_prompt
+        assert "search" in system_prompt  # SEO-focused prompt
 
     @patch("src.youtube_uploader.time.sleep")
     @patch("src.youtube_uploader.requests.post", side_effect=requests.RequestException("offline"))
@@ -311,14 +312,15 @@ class TestUploadShortPrebuiltTitle:
         assert "#apexlegends" in body["snippet"]["tags"]
 
     @patch("src.youtube_uploader.MediaFileUpload")
-    def test_default_description_contains_seo_and_credit(self, _mock_media):
+    @patch("src.youtube_uploader.optimize_description", return_value=None)
+    def test_default_description_contains_seo_and_credit(self, _mock_opt, _mock_media):
         service = _make_mock_service()
         clip = make_clip(title="Insane Clutch", streamer="TheBurntPeanut")
         clip.game_name = "Valorant"
         upload_short(service, "fake_video.mp4", clip)
         description = service.videos().insert.call_args[1]["body"]["snippet"]["description"]
         assert "Valorant highlight" in description
-        assert "Credit: TheBurntPeanut on Twitch." in description
+        assert "TheBurntPeanut" in description
         assert "#shorts" in description.lower()
 
     @patch("src.youtube_uploader.MediaFileUpload")
