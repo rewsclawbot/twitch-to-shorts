@@ -782,6 +782,26 @@ def _process_single_clip_with_context(clip, context: ProcessingContext):
         if burn_context_overlay(vertical_path, vertical_path, clip.game_name or "", clip.title):
             log.info("Applied context overlay for %s", clip.id)
 
+    # Narration (B6)
+    if getattr(cfg, "narration_enabled", False):
+        try:
+            from src.narrator import add_narration
+
+            narrated_path = add_narration(
+                vertical_path,
+                cfg.tmp_dir,
+                clip.title,
+                clip.game_name or "",
+                streamer.name,
+            )
+            if narrated_path:
+                log.info("Added narration to %s", clip.id)
+                if os.path.abspath(narrated_path) != os.path.abspath(vertical_path):
+                    _cleanup_tmp_files(vertical_path)
+                vertical_path = narrated_path
+        except Exception:
+            log.warning("Narration failed for %s (non-critical)", clip.id, exc_info=True)
+
     if dry_run:
         log.info("[DRY RUN] Would upload clip %s: %s", clip.id, clip.title)
         _cleanup_tmp_files(video_path, smart_trim_path, vertical_path, subtitle_path)

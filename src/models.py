@@ -83,6 +83,7 @@ class PipelineConfig:
     peak_action_trim: bool = True
     loop_optimize: bool = True
     context_overlay: bool = True
+    narration_enabled: bool = False
     smart_trim: bool = False
     smart_trim_target_duration: int = 15
     min_visual_quality: float = 0.3
@@ -143,6 +144,7 @@ class PipelineConfig:
         self.peak_action_trim = bool(self.peak_action_trim)
         self.loop_optimize = bool(self.loop_optimize)
         self.context_overlay = bool(self.context_overlay)
+        self.narration_enabled = bool(self.narration_enabled)
         self.smart_trim = bool(self.smart_trim)
         self.force_upload = bool(self.force_upload)
         self.trending_boost_enabled = bool(self.trending_boost_enabled)

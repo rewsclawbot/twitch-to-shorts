@@ -111,6 +111,7 @@ pipeline:
   peak_action_trim: true
   loop_optimize: true
   context_overlay: true
+  narration_enabled: false
   smart_trim: false
   smart_trim_target_duration: 13
   min_visual_quality: 0.08
