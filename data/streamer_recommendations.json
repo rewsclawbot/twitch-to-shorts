@@ -1,0 +1,112 @@
+{
+  "generated_at": "2026-02-15T23:24:16.231833+00:00",
+  "criteria": {
+    "game": null,
+    "min_viewers": 1000,
+    "max_viewers": 50000
+  },
+  "streamers": [
+    {
+      "user_id": "36620767",
+      "user_login": "agraelus",
+      "user_name": "Agraelus",
+      "clip_count": 200,
+      "avg_views": 38.6,
+      "max_views": 1127,
+      "total_views": 7715,
+      "unique_games": 7,
+      "top_games": [
+        "Just Chatting",
+        "Kingdom Come: Deliverance II",
+        "Dead Signal"
+      ],
+      "clip_frequency": 28.6,
+      "shorts_ready_pct": 64.5,
+      "avg_duration": 31.7,
+      "current_viewers": 5369,
+      "current_game": "Just Chatting",
+      "score": 58.9
+    },
+    {
+      "user_id": "107117952",
+      "user_login": "jasontheween",
+      "user_name": "jasontheween",
+      "clip_count": 200,
+      "avg_views": 39.5,
+      "max_views": 1719,
+      "total_views": 7903,
+      "unique_games": 2,
+      "top_games": [
+        "Just Chatting",
+        "Fortnite"
+      ],
+      "clip_frequency": 28.6,
+      "shorts_ready_pct": 63.5,
+      "avg_duration": 37.0,
+      "current_viewers": 35645,
+      "current_game": "Just Chatting",
+      "score": 52.7
+    },
+    {
+      "user_id": "512137332",
+      "user_login": "bisteconee",
+      "user_name": "Bisteconee",
+      "clip_count": 200,
+      "avg_views": 51.6,
+      "max_views": 2834,
+      "total_views": 10311,
+      "unique_games": 6,
+      "top_games": [
+        "Just Chatting",
+        "Unusual Tales: Deep Below",
+        "My Voice Zoo"
+      ],
+      "clip_frequency": 28.6,
+      "shorts_ready_pct": 38.5,
+      "avg_duration": 42.6,
+      "current_viewers": 10623,
+      "current_game": "Just Chatting",
+      "score": 50.2
+    },
+    {
+      "user_id": "552120296",
+      "user_login": "zackrawrr",
+      "user_name": "zackrawrr",
+      "clip_count": 90,
+      "avg_views": 75.3,
+      "max_views": 1526,
+      "total_views": 6778,
+      "unique_games": 3,
+      "top_games": [
+        "Just Chatting",
+        "Relooted",
+        "Mewgenics"
+      ],
+      "clip_frequency": 12.9,
+      "shorts_ready_pct": 31.1,
+      "avg_duration": 45.1,
+      "current_viewers": 46142,
+      "current_game": "Just Chatting",
+      "score": 43.5
+    },
+    {
+      "user_id": "207813352",
+      "user_login": "hasanabi",
+      "user_name": "HasanAbi",
+      "clip_count": 200,
+      "avg_views": 48.7,
+      "max_views": 972,
+      "total_views": 9745,
+      "unique_games": 1,
+      "top_games": [
+        "Just Chatting"
+      ],
+      "clip_frequency": 28.6,
+      "shorts_ready_pct": 33.5,
+      "avg_duration": 43.7,
+      "current_viewers": 31873,
+      "current_game": "Just Chatting",
+      "score": 39.9
+    }
+  ]
+}

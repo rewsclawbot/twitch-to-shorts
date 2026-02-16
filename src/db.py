@@ -72,11 +72,19 @@ def init_schema(conn: sqlite3.Connection):
             clip_data TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS comment_replies (
+            comment_id TEXT PRIMARY KEY,
+            video_id TEXT NOT NULL,
+            reply_text TEXT,
+            replied_at TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_clips_streamer ON clips(streamer);
         CREATE INDEX IF NOT EXISTS idx_clips_posted ON clips(posted_at);
         CREATE INDEX IF NOT EXISTS idx_runs_started ON pipeline_runs(started_at);
         CREATE INDEX IF NOT EXISTS idx_queue_status_score ON clip_queue(status, score DESC);
         CREATE INDEX IF NOT EXISTS idx_queue_streamer ON clip_queue(streamer);
+        CREATE INDEX IF NOT EXISTS idx_comment_replies_video ON comment_replies(video_id);
     """)
     # Migration: add columns if missing (existing cached DBs may lack them)
     cols = {row[1] for row in conn.execute("PRAGMA table_info(clips)").fetchall()}

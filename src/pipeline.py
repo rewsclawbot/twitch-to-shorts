@@ -69,6 +69,7 @@ from src.youtube_uploader import (  # noqa: E402
     upload_short,
 )
 from src.engagement import post_first_comment
+from src.comment_monitor import monitor_and_engage as monitor_comments
 
 LOCK_FILE = os.path.join("data", "pipeline.lock")
 
@@ -1276,6 +1277,35 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
             "Pipeline complete: fetched=%d filtered=%d downloaded=%d processed=%d uploaded=%d failed=%d",
             total_fetched, total_filtered, total_downloaded, total_processed, total_uploaded, total_failed,
         )
+        
+        # Monitor comments and auto-engage if analytics are enabled
+        if cfg.analytics_enabled and not dry_run:
+            log.info("=== Comment Monitoring & Auto-Engagement ===")
+            try:
+                # Use first streamer's credentials for comment monitoring
+                # (assumes all streamers use same YouTube channel, or we monitor all)
+                if streamers:
+                    first_streamer = streamers[0]
+                    yt_service = get_authenticated_service(
+                        client_secrets_file,
+                        first_streamer.youtube_credentials,
+                    )
+                    comment_result = monitor_comments(
+                        yt_service,
+                        conn,
+                        max_videos=5,
+                        max_replies_per_video=2,
+                        max_total_replies=10,
+                    )
+                    log.info(
+                        "Comment monitoring: %d videos checked, %d comments fetched, %d replies posted",
+                        comment_result["videos_checked"],
+                        comment_result["comments_fetched"],
+                        comment_result["replies_posted"],
+                    )
+            except Exception:
+                log.warning("Comment monitoring failed (non-critical)", exc_info=True)
+        
         finish_pipeline_run(conn, run_id, datetime.now(UTC).isoformat(), _totals(), streamer_results)
     except Exception:
         finish_pipeline_run(conn, run_id, datetime.now(UTC).isoformat(), _totals(), streamer_results)
