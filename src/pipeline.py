@@ -858,7 +858,7 @@ def _process_single_clip_with_context(clip, context: ProcessingContext):
         )
         if thumbnail_path:
             from src.thumbnail_enhancer import enhance_thumbnail
-            thumbnail_path = enhance_thumbnail(thumbnail_path, clip.title)
+            thumbnail_path = enhance_thumbnail(thumbnail_path, clip.title, game_name=clip.game_name or "")
             set_thumbnail(yt_service, youtube_id, thumbnail_path)
 
     _cleanup_tmp_files(video_path, smart_trim_path, vertical_path, thumbnail_path, subtitle_path)

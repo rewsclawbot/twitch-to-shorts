@@ -138,8 +138,38 @@ def _find_bold_font(size: int) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
-def enhance_thumbnail(image_path: str, text: str, output_path: str | None = None) -> str:
-    """Apply a readable text overlay to a thumbnail image with graceful fallback."""
+_GAME_COLOR_THEMES: dict[str, tuple[str, str]] = {
+    # (fill_color, stroke_color) — high contrast pairs per game
+    "valorant": ("#FF4655", "#0F1923"),
+    "fortnite": ("#00D4FF", "#1A1A2E"),
+    "apex legends": ("#DA292A", "#1E1E1E"),
+    "league of legends": ("#C89B3C", "#091428"),
+    "overwatch 2": ("#F99E1A", "#2B2B2B"),
+    "counter-strike 2": ("#DE9B35", "#1B2838"),
+    "minecraft": ("#7BC74D", "#3E2723"),
+    "gta v": ("#5ABE41", "#0D0D0D"),
+    "rocket league": ("#007AFF", "#0D0D0D"),
+    "dead by daylight": ("#FF3333", "#1A0A0A"),
+    "elden ring": ("#C8AA6E", "#1A1A1A"),
+    "arc raiders": ("#FF6B35", "#1A1A2E"),
+}
+
+
+def _get_game_colors(game_name: str) -> tuple[str, str]:
+    """Return (fill_color, stroke_color) for a game, defaulting to white/black."""
+    if not game_name:
+        return ("white", "black")
+    key = game_name.lower().strip()
+    return _GAME_COLOR_THEMES.get(key, ("white", "black"))
+
+
+def enhance_thumbnail(
+    image_path: str,
+    text: str,
+    output_path: str | None = None,
+    game_name: str = "",
+) -> str:
+    """Apply a readable text overlay to a thumbnail image with game-aware color theming."""
     if not _thumbnail_text_enabled():
         return image_path
 
@@ -152,15 +182,18 @@ def enhance_thumbnail(image_path: str, text: str, output_path: str | None = None
             image = input_image.copy()
 
         width, height = image.size
-        font_size = max(36, min(96, width // 12))
+        # Larger font for more impact — thumbnails need to pop
+        font_size = max(42, min(108, width // 10))
         font = _find_bold_font(font_size)
         draw = ImageDraw.Draw(image)
 
-        y_position = int(height * 0.2)
-        line_spacing = max(4, font_size // 8)
+        fill_color, stroke_color = _get_game_colors(game_name)
+
+        y_position = int(height * 0.15)
+        line_spacing = max(6, font_size // 6)
 
         for line in lines:
-            bbox = draw.textbbox((0, 0), line, font=font, stroke_width=3)
+            bbox = draw.textbbox((0, 0), line, font=font, stroke_width=4)
             line_width = bbox[2] - bbox[0]
             line_height = bbox[3] - bbox[1]
             x_position = max(0, (width - line_width) // 2)
@@ -168,15 +201,15 @@ def enhance_thumbnail(image_path: str, text: str, output_path: str | None = None
                 (x_position, y_position),
                 line,
                 font=font,
-                fill="white",
-                stroke_width=3,
-                stroke_fill="black",
+                fill=fill_color,
+                stroke_width=4,
+                stroke_fill=stroke_color,
             )
             y_position += line_height + line_spacing
 
         destination = output_path or image_path
         image.save(destination)
-        log.info("Added text overlay to thumbnail: %s", image_path)
+        log.info("Added text overlay to thumbnail: %s (game: %s)", image_path, game_name or "default")
         return destination
     except Exception as err:
         log.warning("Failed to enhance thumbnail %s: %s", image_path, err)
