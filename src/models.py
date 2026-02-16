@@ -84,6 +84,7 @@ class PipelineConfig:
     smart_trim: bool = False
     smart_trim_target_duration: int = 15
     min_visual_quality: float = 0.3
+    min_hook_score: float = 0.0
     force_upload: bool = False
     posting_schedule: dict | None = None
     trending_boost_enabled: bool = False
@@ -123,6 +124,7 @@ class PipelineConfig:
             ("audio_excitement_weight", self.audio_excitement_weight),
             ("hook_strength_weight", self.hook_strength_weight),
             ("min_visual_quality", self.min_visual_quality),
+            ("min_hook_score", self.min_hook_score),
         ]
         for name, numeric_value in float_fields:
             if not isinstance(numeric_value, (int, float)):

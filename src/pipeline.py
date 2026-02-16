@@ -686,6 +686,14 @@ def _process_single_clip_with_context(clip, context: ProcessingContext):
         if clip_duration > 0:
             hook_score = score_hook_strength(video_path, clip.title, clip_duration)
             clip.hook_score = hook_score  # type: ignore[attr-defined]
+            min_hook_score = cfg.min_hook_score
+            if min_hook_score > 0 and hook_score < min_hook_score:
+                log.info(
+                    "Skipping clip %s: hook strength %.3f below threshold %.3f",
+                    clip.id, hook_score, min_hook_score
+                )
+                _cleanup_tmp_files(video_path)
+                return "weak_hook", None
             if hook_score < 0.3:
                 log.warning(
                     "Clip %s has low hook strength: %.3f (still proceeding with upload for data collection)",
@@ -1170,6 +1178,9 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
             # Downloaded but crop/processing failed
             downloaded += 1
             failed += 1
+        elif result == "weak_hook":
+            # Downloaded but hook too weak — skip to save upload slot
+            downloaded += 1
         elif result == "low_visual_quality":
             downloaded += 1
             processed += 1
