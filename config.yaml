@@ -31,9 +31,12 @@ streamers:
     output_w: 420
   privacy_status: public
   category_id: '20'
+  target_games:
+    - ARC Raiders
 - name: xQc
   twitch_id: '71092938'
   youtube_credentials: credentials/theburntpeanut_youtube.json
+  enabled: false  # B8: niche strategy — TheBurntPeanut only for now
   facecam:
     x: 0.75
     y: 0.60
@@ -45,6 +48,7 @@ streamers:
 - name: Lirik
   twitch_id: '23161357'
   youtube_credentials: credentials/theburntpeanut_youtube.json
+  enabled: false  # B8: niche strategy — TheBurntPeanut only for now
   facecam:
     x: 0.02
     y: 0.65
@@ -56,6 +60,7 @@ streamers:
 - name: tarik
   twitch_id: '36340781'
   youtube_credentials: credentials/theburntpeanut_youtube.json
+  enabled: false  # B8: niche strategy — TheBurntPeanut only for now
   facecam:
     x: 0.75
     y: 0.02
@@ -67,6 +72,7 @@ streamers:
 - name: Summit1g
   twitch_id: '26490481'
   youtube_credentials: credentials/theburntpeanut_youtube.json
+  enabled: false  # B8: niche strategy — TheBurntPeanut only for now
   facecam:
     x: 0.75
     y: 0.02

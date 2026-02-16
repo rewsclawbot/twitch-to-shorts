@@ -50,6 +50,8 @@ class StreamerConfig:
     extra_tags: list[str] | None = None
     captions: bool | None = None
     instagram_credentials: str | None = None
+    target_games: list[str] | None = None  # Game names to prioritize (boost 2x score)
+    enabled: bool = True  # Set False to skip this streamer in pipeline runs
 
 
 @dataclass

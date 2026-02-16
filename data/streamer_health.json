@@ -1,0 +1,45 @@
+{
+  "configured": [
+    {
+      "name": "TheBurntPeanut",
+      "twitch_id": "472066926",
+      "clip_count": 500,
+      "total_views": 50301,
+      "avg_views": 100,
+      "status": "active"
+    },
+    {
+      "name": "xQc",
+      "twitch_id": "71092938",
+      "clip_count": 500,
+      "total_views": 32878,
+      "avg_views": 65,
+      "status": "active"
+    },
+    {
+      "name": "Lirik",
+      "twitch_id": "23161357",
+      "clip_count": 146,
+      "total_views": 14021,
+      "avg_views": 96,
+      "status": "active"
+    },
+    {
+      "name": "tarik",
+      "twitch_id": "36340781",
+      "clip_count": 314,
+      "total_views": 4861,
+      "avg_views": 15,
+      "status": "active"
+    },
+    {
+      "name": "Summit1g",
+      "twitch_id": "26490481",
+      "clip_count": 447,
+      "total_views": 12817,
+      "avg_views": 28,
+      "status": "active"
+    }
+  ],
+  "inactive": []
+}

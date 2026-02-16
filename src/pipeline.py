@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from src.clip_filter import filter_and_rank, score_clip_audio  # noqa: E402
 from src.hook_detector import score_hook_strength  # noqa: E402
+from src.hook_editor import recut_for_hook  # noqa: E402
 from src.trending import get_trending_multipliers  # noqa: E402
 from src.db import (  # noqa: E402
     daily_upload_count,
@@ -696,9 +697,16 @@ def _process_single_clip_with_context(clip, context: ProcessingContext):
                 return "weak_hook", None
             if hook_score < 0.3:
                 log.warning(
-                    "Clip %s has low hook strength: %.3f (still proceeding with upload for data collection)",
+                    "Clip %s has low hook strength: %.3f (attempting recut)",
                     clip.id, hook_score
                 )
+
+            # Attempt to recut clips with weak hooks
+            if hook_score < 0.4:
+                recut_path = recut_for_hook(video_path, cfg.tmp_dir, hook_score)
+                if recut_path:
+                    log.info("Using recut video for %s (hook was %.3f)", clip.id, hook_score)
+                    video_path = recut_path
 
     processing_video_path = video_path
     smart_trim_path = None
@@ -1076,6 +1084,23 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
     for c in new_clips:
         c.game_name = game_names.get(c.game_id, "")
 
+    # Apply target game boost/filter if configured
+    target_games = streamer.target_games
+    if target_games:
+        target_lower = {g.lower() for g in target_games}
+        on_target = [c for c in new_clips if c.game_name.lower() in target_lower]
+        off_target = [c for c in new_clips if c.game_name.lower() not in target_lower]
+        # Boost on-target clips 2x
+        for c in on_target:
+            c.score *= 2.0
+        # Re-sort: on-target first (by score), then off-target (by score)
+        new_clips = sorted(on_target, key=lambda c: c.score, reverse=True) + \
+                    sorted(off_target, key=lambda c: c.score, reverse=True)
+        log.info(
+            "Target game filter for %s: %d on-target (%s), %d off-target",
+            name, len(on_target), ", ".join(target_lower), len(off_target)
+        )
+
     # Score audio excitement for downloaded clips (if enabled)
     if cfg.audio_excitement_weight > 0 and new_clips:
         log.info("Scoring audio excitement for %d clips", len(new_clips))
@@ -1310,6 +1335,15 @@ def _run_pipeline_inner(cfg: PipelineConfig, streamers: list[StreamerConfig], ra
 
     try:
         for streamer in streamers:
+            if not getattr(streamer, 'enabled', True):
+                log.info("Skipping disabled streamer: %s", streamer.name)
+                streamer_results.append({
+                    "streamer": streamer.name,
+                    "uploaded": 0,
+                    "failed": 0,
+                    "skip_reason": "disabled",
+                })
+                continue
             fetched, filtered, downloaded, processed, uploaded, failed, quota_exhausted, skip_reason = _process_streamer(
                 streamer, twitch, cfg, conn, log, dry_run,
                 client_secrets_file, title_template, title_templates,
