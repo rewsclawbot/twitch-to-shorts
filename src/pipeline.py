@@ -13,6 +13,7 @@ from src.clip_filter import filter_and_rank, score_clip_audio  # noqa: E402
 from src.hook_detector import score_hook_strength  # noqa: E402
 from src.trending import get_trending_multipliers  # noqa: E402
 from src.db import (  # noqa: E402
+    daily_upload_count,
     get_clips_for_metrics,
     get_connection,
     increment_fail_count,
@@ -453,6 +454,39 @@ def run_pipeline(pipeline: PipelineConfig, streamers: list[StreamerConfig], raw_
         conn.close()
 
 
+def _is_rate_limited(lockfile: str, log: logging.Logger) -> bool:
+    """Check if we're in a YouTube upload rate-limit cooldown (24h window)."""
+    import json
+    if not os.path.exists(lockfile):
+        return False
+    try:
+        with open(lockfile) as f:
+            data = json.load(f)
+        limited_at = datetime.fromisoformat(data["limited_at"])
+        hours_since = (datetime.now(UTC) - limited_at).total_seconds() / 3600
+        if hours_since < 24:
+            log.info(
+                "YouTube rate limit active (hit %.1fh ago, %.1fh remaining) — skipping uploads",
+                hours_since, 24 - hours_since,
+            )
+            return True
+        # Expired — clean up
+        os.remove(lockfile)
+        log.info("YouTube rate limit expired — uploads re-enabled")
+    except Exception as e:
+        log.warning("Failed to read rate limit lockfile: %s", e)
+    return False
+
+
+def _set_rate_limited(lockfile: str, log: logging.Logger) -> None:
+    """Record that we hit a YouTube upload rate limit."""
+    import json
+    os.makedirs(os.path.dirname(lockfile) or ".", exist_ok=True)
+    with open(lockfile, "w") as f:
+        json.dump({"limited_at": datetime.now(UTC).isoformat()}, f)
+    log.warning("YouTube rate limit recorded — uploads paused for 24h")
+
+
 def _is_within_posting_window(posting_schedule: dict | None, force_upload: bool = False) -> bool:
     """Check if current time is within allowed posting windows.
 
@@ -749,6 +783,7 @@ def _process_single_clip_with_context(clip, context: ProcessingContext):
                                   prebuilt_title=planned_title)
     except QuotaExhaustedError:
         log.warning("YouTube quota exhausted — stopping uploads for this run")
+        _set_rate_limited(cfg.rate_limit_lockfile, log)
         _cleanup_tmp_files(video_path, smart_trim_path, vertical_path, thumbnail_path, subtitle_path)
         return "quota_exhausted", None
     except ForbiddenError:
@@ -968,9 +1003,30 @@ def _process_streamer(streamer, twitch, cfg, conn, log, dry_run,
         skip_reason = "no_new_clips"
         return _finalize_and_return(False)
 
+    # Rate limit check: skip uploads entirely if YouTube rate-limited us
+    if _is_rate_limited(cfg.rate_limit_lockfile, log):
+        log.info("Enqueueing clips for %s (rate limited)", name)
+        clips_to_queue = new_clips[:cfg.max_uploads_per_window]
+        clips_with_scores = [(c, c.score) for c in clips_to_queue]
+        enqueue_clips(conn, clips_with_scores)
+        skip_reason = "rate_limited"
+        return _finalize_and_return(False)
+
+    # Daily upload cap: protect fresh channels from YouTube rate limits
+    daily_total = daily_upload_count(conn, hours=24)
+    daily_remaining = max(cfg.max_daily_uploads - daily_total, 0)
+    if daily_remaining == 0:
+        log.info("Daily upload cap reached (%d in last 24h, max %d) — enqueueing for later",
+                 daily_total, cfg.max_daily_uploads)
+        clips_to_queue = new_clips[:cfg.max_uploads_per_window]
+        clips_with_scores = [(c, c.score) for c in clips_to_queue]
+        enqueue_clips(conn, clips_with_scores)
+        skip_reason = "daily_cap"
+        return _finalize_and_return(False)
+
     # Upload scheduling: check BEFORE game name fetch to avoid wasted API calls
     recent = recent_upload_count(conn, name, cfg.upload_spacing_hours, channel_key=channel_key)
-    uploads_remaining = max(cfg.max_uploads_per_window - recent, 0)
+    uploads_remaining = min(max(cfg.max_uploads_per_window - recent, 0), daily_remaining)
     if uploads_remaining == 0:
         log.info("Skipping uploads for %s: %d uploaded in last %dh", name, recent, cfg.upload_spacing_hours)
         skip_reason = "spacing_limited"

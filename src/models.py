@@ -87,6 +87,8 @@ class PipelineConfig:
     force_upload: bool = False
     posting_schedule: dict | None = None
     trending_boost_enabled: bool = False
+    max_daily_uploads: int = 4
+    rate_limit_lockfile: str = "data/upload_ratelimit.json"
 
     def __post_init__(self):
         errors: list[str] = []

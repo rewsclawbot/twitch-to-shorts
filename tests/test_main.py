@@ -696,6 +696,13 @@ class TestProcessSingleClipInstagram:
 # ---- _process_streamer tests ----
 
 class TestProcessStreamer:
+    @pytest.fixture(autouse=True)
+    def _patch_rate_limits(self):
+        with patch("src.pipeline._is_rate_limited", return_value=False), \
+             patch("src.pipeline._set_rate_limited"), \
+             patch("src.pipeline.daily_upload_count", return_value=0):
+            yield
+
     def _make_raw_config(self):
         return {
             "youtube": {
@@ -1739,6 +1746,13 @@ class TestIsWithinPostingWindow:
 
 class TestProcessStreamerPostingWindow:
     """Integration tests for posting window in _process_streamer."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_rate_limits(self):
+        with patch("src.pipeline._is_rate_limited", return_value=False), \
+             patch("src.pipeline._set_rate_limited"), \
+             patch("src.pipeline.daily_upload_count", return_value=0):
+            yield
 
     @patch("src.pipeline._is_within_posting_window", return_value=False)
     @patch("src.pipeline.update_streamer_stats")

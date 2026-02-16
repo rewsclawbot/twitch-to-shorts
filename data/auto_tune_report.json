@@ -1,0 +1,40 @@
+{
+  "timestamp": "2026-02-16T15:00:14.469231+00:00",
+  "clips_analyzed": 3,
+  "title_variants": {
+    "original": {
+      "count": 3,
+      "avg_views": 9.0,
+      "avg_ctr": 0.0,
+      "avg_retention": 0.0
+    }
+  },
+  "duration_buckets": {
+    "short_0_15": {
+      "count": 0,
+      "avg_retention": 0,
+      "avg_views": 0
+    },
+    "medium_15_30": {
+      "count": 2,
+      "avg_retention": 0.0,
+      "avg_views": 6.5
+    },
+    "long_30_60": {
+      "count": 1,
+      "avg_retention": 0.0,
+      "avg_views": 14.0
+    }
+  },
+  "streamers": {
+    "TheBurntPeanut": {
+      "count": 3,
+      "avg_views": 9.0,
+      "avg_retention": 0.0
+    }
+  },
+  "recommendations": [
+    "Best performing title variant: 'original' (avg 9 views)",
+    "Streamer 'TheBurntPeanut': 9 avg views, 0.0% retention (3 clips)"
+  ]
+}

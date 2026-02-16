@@ -92,8 +92,9 @@ pipeline:
   tmp_dir: data/tmp
   db_path: data/clips.db
   log_file: data/pipeline.log
-  upload_spacing_hours: 1
-  max_uploads_per_window: 5
+  upload_spacing_hours: 2
+  max_uploads_per_window: 2
+  max_daily_uploads: 4
   analytics_enabled: true
   instagram_enabled: false
   analytics_min_age_hours: 24

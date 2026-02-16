@@ -175,6 +175,16 @@ def vod_overlaps(
     return row is not None
 
 
+def daily_upload_count(conn: sqlite3.Connection, hours: int = 24) -> int:
+    """Count ALL uploads across all streamers within the last N hours."""
+    cutoff = (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
+    row = conn.execute(
+        "SELECT COUNT(*) as cnt FROM clips WHERE posted_at >= ? AND youtube_id IS NOT NULL",
+        (cutoff,),
+    ).fetchone()
+    return row["cnt"] if row else 0
+
+
 def recent_upload_count(
     conn: sqlite3.Connection,
     streamer: str,
