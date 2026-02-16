@@ -25,4 +25,4 @@ if [ -f ".env" ]; then
 fi
 
 mkdir -p data
-PIPELINE_TRIGGER=local python main.py 2>&1 | tee -a data/pipeline.log
+PIPELINE_TRIGGER=local python main.py 2>&1
